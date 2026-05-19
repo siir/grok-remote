@@ -137,6 +137,13 @@ export class ChatView {
       files:        make('files',        'Files'),
       info:         make('info',         'Info'),
     };
+    this.starBtn = el('button', {
+      class: 'chat-star',
+      type: 'button',
+      title: 'Star this conversation',
+      'aria-label': 'star conversation',
+      onclick: () => this.toggleStar(),
+    }, '☆');
     this.connectBtn = el('button', {
       class: 'tab-action tab-action--toggle',
       type: 'button',
@@ -154,9 +161,32 @@ export class ChatView {
       this.tabBtns.files,
       this.tabBtns.info,
       el('span', { class: 'tabs-spacer' }),
+      this.starBtn,
       this.connectBtn,
       this.copyConvoBtn,
     );
+  }
+
+  async toggleStar() {
+    if (!this.agentId) return;
+    const cur = !!(this.currentAgent && this.currentAgent.starred);
+    this.starBtn.disabled = true;
+    try {
+      const updated = await api.updateAgent(this.agentId, { starred: !cur });
+      this.applyAgentRefresh(updated);
+    } catch (e) {
+      this.showToast(`star failed: ${e.message}`, 'warn');
+    } finally {
+      this.starBtn.disabled = false;
+    }
+  }
+
+  _syncStarBtn() {
+    if (!this.starBtn) return;
+    const on = !!(this.currentAgent && this.currentAgent.starred);
+    this.starBtn.classList.toggle('is-on', on);
+    this.starBtn.textContent = on ? '★' : '☆';
+    this.starBtn.title = on ? 'Unstar this conversation' : 'Star this conversation';
   }
 
   async toggleConnection() {
@@ -188,6 +218,7 @@ export class ChatView {
     if (!a || a.id !== this.agentId) return;
     this.currentAgent = a;
     this._syncConnectBtn();
+    this._syncStarBtn();
     // Re-render info tab if visible so status/sessionId etc. stay current.
     if (this.tabsState === 'info') this.renderInfo(a);
   }
@@ -430,8 +461,13 @@ export class ChatView {
       this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       this.filesPane.replaceChildren();
       this._setComposerEnabled(false);
+      // Hide the star + connect buttons until an agent is loaded.
+      if (this.starBtn)    this.starBtn.hidden = true;
+      if (this.connectBtn) this.connectBtn.hidden = true;
       return;
     }
+    if (this.starBtn)    this.starBtn.hidden = false;
+    if (this.connectBtn) this.connectBtn.hidden = false;
 
     this.agentId = agent.id;
     this.currentAgent = agent;
@@ -439,6 +475,7 @@ export class ChatView {
     this._setComposerEnabled(true);
     this.composerCancel.disabled = true;
     this._syncConnectBtn();
+    this._syncStarBtn();
 
     if (this.tabsState === 'files') {
       mountFilesTab(this.filesPane, { id: this.agentId });

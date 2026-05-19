@@ -368,19 +368,47 @@ body::before {
 .agent-kill:hover,
 .agent-archive:hover { color: var(--amber); }
 
-/* Star toggle */
-.agent-star {
+/* Star toggle (sidebar + chat header share these visuals) */
+.agent-star,
+.chat-star {
   background: transparent;
   border: none;
   color: var(--dim);
   font-family: var(--mono);
-  font-size: 13px;
-  cursor: pointer;
-  padding: 0 2px;
+  font-size: 18px;       /* bigger, readable glyph */
   line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;      /* finger-sized tap target */
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
 }
-.agent-star:hover { color: var(--amber); }
-.agent-star.is-on { color: var(--amber); }
+.agent-star:hover,
+.chat-star:hover {
+  color: var(--amber);
+  background: rgba(252, 168, 84, 0.10);
+}
+.agent-star:active,
+.chat-star:active { transform: scale(0.92); }
+.agent-star.is-on,
+.chat-star.is-on { color: var(--amber); }
+.agent-star.is-on:hover,
+.chat-star.is-on:hover { color: var(--amber); }
+.agent-star:disabled,
+.chat-star:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Sidebar × / archive close-button. Bigger and clearly tappable. */
+.agent-kill,
+.agent-archive {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 18px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.agent-kill:hover,
+.agent-archive:hover {
+  background: rgba(252, 168, 84, 0.10);
+}
 
 /* Archived view */
 .agents-archived-toggle {
