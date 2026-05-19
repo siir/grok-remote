@@ -46,7 +46,7 @@ One command sets it up. PM2 keeps the server alive. Tailscale handles the networ
 ## Install
 
 ```sh
-git clone https://github.com/<you>/grok-remote.git
+git clone https://github.com/daniel-farina/grok-remote.git
 cd grok-remote
 ./install.sh
 ```
