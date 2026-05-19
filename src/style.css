@@ -29,8 +29,11 @@ html, body {
   font-size: 14px;
   line-height: 1.5;
   /* Lock to viewport. Only the chat-stream scrolls; the composer and the
-     sidebar stay put regardless of conversation length. */
+     sidebar stay put regardless of conversation length.
+     100dvh respects iOS Safari's collapsing URL bar so we never end up
+     with a chunk of layout hidden behind the bottom toolbar. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -1467,10 +1470,14 @@ body::before {
   /* hamburger visible on narrow */
   .hamburger { display: flex; }
 
-  /* sidebar becomes an off-canvas drawer */
+  /* sidebar becomes an off-canvas drawer. Dashboard stays a flex column
+     so the chat pane keeps filling the viewport and the composer stays
+     pinned at the bottom on mobile too. */
   .dashboard {
-    display: block;
-    min-height: calc(100vh - 110px);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
   }
   .sidebar {
     position: fixed;
@@ -1493,7 +1500,7 @@ body::before {
   body[data-drawer-open] .sidebar { transform: translateX(0); }
   body:not([data-drawer-open]) .drawer-backdrop { display: none; }
 
-  .main-pane { width: 100%; }
+  .main-pane { width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
   /* tap targets >= 44 px */
   .btn,
@@ -1506,9 +1513,19 @@ body::before {
   }
   .agent-kill { min-width: 44px; min-height: 44px; }
 
-  /* composer >= 48 px, send button visible */
-  .composer-input { min-height: 48px; }
+  /* Composer height: smaller on mobile to leave room for the chat above,
+     but still strictly fixed (no resize handle, no grow on focus). */
+  .composer-input { height: 72px; min-height: 72px; max-height: 72px; }
   .composer-actions { flex-wrap: wrap; }
+
+  /* Tabs row: allow the action buttons (disconnect / copy convo) to wrap
+     under the tabs when the row is too narrow. */
+  .tabs { flex-wrap: wrap; row-gap: 6px; padding-right: 10px; }
+  .tabs-spacer { flex: 1 1 auto; min-width: 8px; }
+  .tab-action { padding: 5px 8px; font-size: 11px; }
+
+  /* Composer extras row: pills + attach button + send/cancel never overflow */
+  .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) 10px; }
 
   /* tool cards / info grid stack on narrow */
   .tool-head { flex-wrap: wrap; }
