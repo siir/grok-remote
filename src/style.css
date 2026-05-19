@@ -35,6 +35,40 @@ html, body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+  /* Native-feel touch: no grey tap-flash, no 300ms double-tap delay. */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
+  /* Prevent rubber-band scroll on iOS Safari when scrolling inside
+     a chat-stream that hits its top/bottom. */
+  overscroll-behavior: none;
+}
+
+/* Interactive elements: opt in to manipulation gesture handler so taps
+   are immediate and explicitly disable user-select on chrome (buttons,
+   tabs) which makes long-press behave like a button, not a text select. */
+button,
+.tab,
+.agent-item,
+.files-row,
+.files-crumb,
+.theme-toggle,
+.hamburger {
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+/* Text-bearing surfaces keep selection. */
+.chat-stream,
+.message-bubble,
+.payload-pre,
+.files-code,
+.info-grid,
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 body {
@@ -335,9 +369,15 @@ body::before {
   border-radius: 6px;
   padding: 8px 10px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, transform 0.08s;
 }
 .agent-item:hover { border-color: var(--border-2); }
+/* Visible tap feedback on mobile (we disabled the default tap-highlight) */
+.agent-item:active {
+  background: rgba(94, 234, 212, 0.06);
+  border-color: var(--teal);
+  transform: scale(0.99);
+}
 .agent-item--selected {
   border-color: var(--teal);
   background: rgba(94, 234, 212, 0.04);

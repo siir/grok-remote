@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#5eead4" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -44,9 +44,14 @@
       <p class="subtitle">your grok agent, on your tailnet</p>
     </section>
 
-    <main id="app" class="app"></main>
-
-    <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+    <main id="app" class="app">
+      <!-- Backdrop lives INSIDE .app on purpose: .app creates a stacking
+           context (z-index: 2 above the body scanlines), so the sidebar
+           cannot raise itself above siblings of .app no matter how high
+           its z-index. Keeping the backdrop in the same context makes
+           "backdrop dims chat, sidebar above backdrop" actually work. -->
+      <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+    </main>
 
     <div id="install-banner" hidden>
       <span data-role="label">Install Grok Remote as an app.</span>
