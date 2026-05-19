@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grok Remote</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%2280%22 font-size=%2280%22>·</text></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-name">grok-remote</span>
+        <span class="brand-version" id="brand-version">v0.1.0</span>
+      </div>
+      <div class="status" id="status">
+        <span class="status-pill status-pill--idle" id="status-pill">·</span>
+        <span class="status-text" id="status-text">probing tailnet</span>
+      </div>
+    </header>
+
+    <main class="stage">
+      <pre class="figlet" id="figlet" aria-hidden="true"></pre>
+      <p class="subtitle">your grok agent, on your tailnet</p>
+
+      <section class="panel">
+        <h2 class="panel-title">/api/hello</h2>
+        <pre class="panel-body" id="hello-body">connecting...</pre>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <div class="card-label">tailnet url</div>
+          <div class="card-value" id="card-url">·</div>
+        </div>
+        <div class="card">
+          <div class="card-label">tailnet host</div>
+          <div class="card-value" id="card-dns">·</div>
+        </div>
+        <div class="card">
+          <div class="card-label">tailnet ip</div>
+          <div class="card-value" id="card-ip">·</div>
+        </div>
+        <div class="card">
+          <div class="card-label">uptime</div>
+          <div class="card-value" id="card-uptime">·</div>
+        </div>
+      </section>
+
+      <section class="next">
+        <h3 class="next-title">what's next</h3>
+        <ul class="next-list">
+          <li>This is the hello-world surface. Endpoints land at <code>/api/*</code>.</li>
+          <li>Next build: <code>/api/agent</code> wraps <code>grok agent stdio</code> behind an auth header.</li>
+          <li>Run <code>pm2 logs grok-remote</code> to follow what the server is doing.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="bottombar">
+      <span>not affiliated with xAI, grok, or Tailscale</span>
+      <span class="sep">·</span>
+      <a href="https://x.com/daniel_farinax" target="_blank" rel="noopener">@daniel_farinax</a>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "name": "grok-remote",
+  "version": "0.1.0",
+  "description": "Run your grok agent over your tailnet. Hello-world starting point for the remote-agent build.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "install:setup": "node installer.js",
+    "start": "node server.js",
+    "dev": "vite",
+    "build": "vite build",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop grok-remote",
+    "pm2:restart": "pm2 restart grok-remote",
+    "pm2:logs": "pm2 logs grok-remote"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "Daniel Farina <https://x.com/daniel_farinax>",
+  "bin": {
+    "grok-remote": "./server.js"
+  }
+}
