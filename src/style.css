@@ -375,6 +375,8 @@ body::before {
 .agent-dot--running  { background: var(--amber); animation: dot-pulse 1.0s infinite; }
 .agent-dot--errored  { background: var(--red); }
 .agent-dot--killed   { background: var(--dim); }
+.agent-dot--disconnected,
+.agent-dot--exited   { background: transparent; box-shadow: inset 0 0 0 1px var(--dim); }
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
   50%      { opacity: 0.55; box-shadow: 0 0 0 5px transparent; }
@@ -388,6 +390,34 @@ body::before {
 .agent-status--running  { color: var(--amber); }
 .agent-status--errored  { color: var(--red);   }
 .agent-status--killed   { color: var(--dim);   }
+.agent-status--disconnected,
+.agent-status--exited   { color: var(--dim);   }
+
+/* Sidebar connect/disconnect text-button */
+.agent-link {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  padding: 0;
+}
+.agent-link:hover:not(:disabled) { color: var(--teal); }
+.agent-link:disabled { opacity: 0.5; cursor: not-allowed; }
+.agent-link--off { color: var(--blue); }
+.agent-link--off:hover:not(:disabled) { color: var(--teal); }
+
+.agent-item--off .agent-name { color: var(--muted); }
+.agent-item--off { opacity: 0.78; }
+
+/* Chat header disconnect/connect toggle */
+.tab-action--toggle {
+  color: var(--muted);
+}
+.tab-action--toggle.tab-action--off { color: var(--blue); }
+.tab-action--toggle:hover:not(:disabled) { color: var(--teal); }
 .agent-status--starting { color: var(--blue);  }
 
 /* ── chat pane / tabs ─────────────────────────────────── */

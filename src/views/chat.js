@@ -79,6 +79,17 @@ export class ChatView {
       }
     };
     document.addEventListener('visibilitychange', this._onVisibility);
+
+    // Sidebar pushes fresh agent records into the chat view on each poll
+    // tick. Pick out the one matching our active agent so the chat header,
+    // info tab, and connect/disconnect button reflect live state.
+    this._onAgentsRefresh = (ev) => {
+      if (!this.agentId) return;
+      const list = (ev && ev.detail) || [];
+      const a = list.find(x => x && x.id === this.agentId);
+      if (a) this.applyAgentRefresh(a);
+    };
+    document.addEventListener('grok-remote:agents-refresh', this._onAgentsRefresh);
   }
 
   mount(parent) {
@@ -94,6 +105,10 @@ export class ChatView {
     if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
+    if (this._onAgentsRefresh) {
+      document.removeEventListener('grok-remote:agents-refresh', this._onAgentsRefresh);
+      this._onAgentsRefresh = null;
+    }
   }
 
   buildTabs() {
@@ -107,6 +122,12 @@ export class ChatView {
       files:        make('files',        'Files'),
       info:         make('info',         'Info'),
     };
+    this.connectBtn = el('button', {
+      class: 'tab-action tab-action--toggle',
+      type: 'button',
+      title: 'Disconnect: stop the agent process but keep the conversation.',
+      onclick: () => this.toggleConnection(),
+    }, 'disconnect');
     this.copyConvoBtn = el('button', {
       class: 'tab-action tab-action--copy',
       type: 'button',
@@ -118,8 +139,53 @@ export class ChatView {
       this.tabBtns.files,
       this.tabBtns.info,
       el('span', { class: 'tabs-spacer' }),
+      this.connectBtn,
       this.copyConvoBtn,
     );
+  }
+
+  async toggleConnection() {
+    if (!this.agentId) return;
+    const a = this.currentAgent;
+    const disconnected = !!(a && (a.status === 'disconnected' || a.status === 'exited'));
+    this.connectBtn.disabled = true;
+    try {
+      if (disconnected) {
+        await api.connect(this.agentId);
+        this.showToast('connecting...', 'info');
+      } else {
+        await api.disconnect(this.agentId);
+        this.showToast('disconnected; sending a message will reconnect.', 'info');
+      }
+    } catch (e) {
+      this.showToast(`${disconnected ? 'connect' : 'disconnect'} failed: ${e.message}`, 'warn');
+    } finally {
+      this.connectBtn.disabled = false;
+      // The sidebar's 4 s poll will refresh state shortly; force one quick
+      // refresh so the chat header label updates immediately.
+      setTimeout(() => {
+        api.getAgent(this.agentId).then((fresh) => this.applyAgentRefresh(fresh)).catch(() => {});
+      }, 500);
+    }
+  }
+
+  applyAgentRefresh(a) {
+    if (!a || a.id !== this.agentId) return;
+    this.currentAgent = a;
+    this._syncConnectBtn();
+    // Re-render info tab if visible so status/sessionId etc. stay current.
+    if (this.tabsState === 'info') this.renderInfo(a);
+  }
+
+  _syncConnectBtn() {
+    if (!this.connectBtn) return;
+    const a = this.currentAgent;
+    const disconnected = !!(a && (a.status === 'disconnected' || a.status === 'exited'));
+    this.connectBtn.textContent = disconnected ? 'connect' : 'disconnect';
+    this.connectBtn.classList.toggle('tab-action--off', disconnected);
+    this.connectBtn.title = disconnected
+      ? 'Reconnect: resume the conversation in a fresh agent process.'
+      : 'Disconnect: stop the agent process but keep the conversation.';
   }
 
   async copyConversation() {
@@ -346,6 +412,7 @@ export class ChatView {
     this.latestTotalTokens = (agent && agent.totalTokens) || null;
     this._setComposerEnabled(true);
     this.composerCancel.disabled = true;
+    this._syncConnectBtn();
 
     if (this.tabsState === 'files') {
       mountFilesTab(this.filesPane, { id: this.agentId });

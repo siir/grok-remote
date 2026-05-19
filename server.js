@@ -211,6 +211,22 @@ async function handleApi(req, res, url, method) {
       await manager.cancel(id);
       return sendJson(res, 202, { ok: true, accepted: true });
     }
+    if (suffix === '/disconnect' && method === 'POST') {
+      try {
+        const out = await manager.disconnect(id);
+        return sendJson(res, 200, out);
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message });
+      }
+    }
+    if (suffix === '/connect' && method === 'POST') {
+      try {
+        const out = await manager.connect(id);
+        return sendJson(res, 202, out);
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message });
+      }
+    }
     if (suffix === '/history' && method === 'GET') {
       const body = readHistory(id);
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });

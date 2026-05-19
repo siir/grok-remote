@@ -36,6 +36,8 @@ export const api = {
   getAgent:     (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}`),
   createAgent:  (body)        => request('POST',   '/api/agents', body || {}),
   deleteAgent:  (id)          => request('DELETE', `/api/agents/${encodeURIComponent(id)}`),
+  disconnect:   (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/disconnect`),
+  connect:      (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/connect`),
   prompt:       (id, textOrOpts) => {
     // Backwards compat: a plain string still works.
     const body = (textOrOpts && typeof textOrOpts === 'object')
