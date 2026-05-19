@@ -351,18 +351,49 @@ async function stepStartTailscaled() {
     // Check if it's already running (try `tailscale status`)
     const status = tryCmd('tailscale', ['status', '--json']);
     if (status.ok) return { status: 'skip', detail: 'already running' };
+
     if (process.platform === 'darwin') {
-      // On macOS the Tailscale.app menu bar handles tailscaled.
-      // If the CLI errors, prompt to open the app once.
+      // Two ways to get tailscaled running on macOS:
+      //   (a) Tailscale.app from tailscale.com (GUI; runs daemon in user
+      //       session). If /Applications/Tailscale.app exists, the user
+      //       just needs to launch it once.
+      //   (b) CLI-only install (e.g. `brew install tailscale`): no GUI,
+      //       no auto-start. Tailscale ships an installer for a launchd
+      //       LaunchDaemon: `sudo tailscale install-system-daemon`.
+      //
+      // We don't run sudo from here because the installer's piped stdio
+      // can't relay a password prompt. We detect the situation and tell
+      // the user exactly what to run, then warn so they re-run install.sh.
+      const hasGuiApp = fs.existsSync('/Applications/Tailscale.app');
+      if (hasGuiApp) {
+        return { ok: false, status: 'warn',
+          detail: 'open Tailscale.app once to start the daemon, then re-run installer' };
+      }
+      // CLI-only install path.
+      const hasSystemDaemonCmd = tryCmd('tailscale', ['install-system-daemon', '--help']).ok;
+      if (hasSystemDaemonCmd) {
+        return { ok: false, status: 'warn',
+          detail: 'CLI-only install detected. Run: sudo tailscale install-system-daemon (you will be prompted for your password). Then re-run installer.' };
+      }
+      // Neither GUI app nor system-daemon subcommand: tell them to grab
+      // the official GUI from tailscale.com.
       return { ok: false, status: 'warn',
-        detail: 'open Tailscale.app once to start the daemon, then re-run installer' };
+        detail: 'Tailscale daemon not running. Install Tailscale.app from https://tailscale.com/download and launch it once. Then re-run installer.' };
     }
+
     if (process.platform === 'linux') {
       const r = await runCmd('sudo', ['systemctl', 'enable', '--now', 'tailscaled']);
-      return r.ok
-        ? { ok: true, detail: 'tailscaled enabled via systemctl' }
-        : { ok: false, detail: 'sudo systemctl enable --now tailscaled failed' };
+      if (r.ok) return { ok: true, detail: 'tailscaled enabled via systemctl' };
+      // Common reason for failure: no systemd (Alpine, minimal containers).
+      // Detect and give a more useful hint.
+      const hasSystemctl = !!which('systemctl');
+      if (!hasSystemctl) {
+        return { ok: false, status: 'warn',
+          detail: 'no systemd detected. Start tailscaled however your distro expects (e.g. `sudo tailscaled --tun=userspace-networking &`), then re-run installer.' };
+      }
+      return { ok: false, detail: 'sudo systemctl enable --now tailscaled failed (run it manually with sudo and inspect the error, then re-run installer)' };
     }
+
     return { ok: false, detail: `unsupported platform: ${process.platform}` };
   });
 }
