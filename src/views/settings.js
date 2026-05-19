@@ -14,6 +14,7 @@ export class SettingsView {
     this.modelSelect  = null;
     this.cwdInput     = el('input', { class: 'inp', type: 'text', placeholder: '/path/to/working/dir' });
     this.autoApprove  = el('input', { type: 'checkbox' });
+    this.debugToggle  = el('input', { type: 'checkbox' });
     this.themePicker = this.buildThemePicker();
 
     this.statusEl = el('div', { class: 'settings-status' });
@@ -46,6 +47,11 @@ export class SettingsView {
         el('label', { class: 'toggle' }, this.autoApprove,
           el('span', { class: 'toggle-text' }, 'on')),
         'server already passes --always-approve. shown here for visibility.'),
+
+      this.field('debug controls',
+        el('label', { class: 'toggle' }, this.debugToggle,
+          el('span', { class: 'toggle-text' }, 'show developer affordances')),
+        'shows the { payload } button in the composer to inspect the exact JSON sent to the agent.'),
 
       this.field('theme',
         this.themePicker,
@@ -91,6 +97,7 @@ export class SettingsView {
         this.modelInput.value  = this.settings.defaultModel || '';
         this.cwdInput.value    = this.settings.defaultCwd   || '';
         this.autoApprove.checked = !!this.settings.autoApprove;
+        this.debugToggle.checked = !!this.settings.debug;
       } else {
         this.setStatus('settings unreachable · using defaults', 'warn');
       }
@@ -140,6 +147,7 @@ export class SettingsView {
         : (this.modelInput.value.trim() || null),
       defaultCwd:   this.cwdInput.value.trim() || null,
       autoApprove:  !!this.autoApprove.checked,
+      debug:        !!this.debugToggle.checked,
       // theme is persisted client-side in localStorage by setTheme(); we still
       // forward it so server-side settings can mirror the preference if useful.
       theme:        getTheme(),
@@ -150,6 +158,11 @@ export class SettingsView {
       const updated = await api.patchSettings(body);
       this.settings = updated || body;
       this.setStatus('saved', 'ok');
+      // Notify the rest of the app (chat view, etc.) so debug-gated UI
+      // updates without a page reload.
+      window.dispatchEvent(new CustomEvent('grok-remote:settings-change', {
+        detail: this.settings,
+      }));
     } catch (e) {
       this.setStatus(`save failed: ${e.message}`, 'fail');
     } finally {

@@ -173,6 +173,15 @@ async function handleApi(req, res, url, method) {
     if (suffix === '' && method === 'GET') {
       return sendJson(res, 200, rec);
     }
+    if (suffix === '' && method === 'PATCH') {
+      try {
+        const body = await readJsonBody(req);
+        const out = await manager.update(id, body || {});
+        return sendJson(res, 200, out);
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message });
+      }
+    }
     if (suffix === '' && method === 'DELETE') {
       const ok = await manager.kill(id);
       return sendJson(res, ok ? 200 : 404, { ok });

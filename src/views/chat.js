@@ -90,6 +90,17 @@ export class ChatView {
       if (a) this.applyAgentRefresh(a);
     };
     document.addEventListener('grok-remote:agents-refresh', this._onAgentsRefresh);
+
+    // Settings changes (e.g. debug toggle) come in via this custom event.
+    this._onSettingsChange = (ev) => this.applySettings((ev && ev.detail) || {});
+    window.addEventListener('grok-remote:settings-change', this._onSettingsChange);
+    // Pull initial settings so the debug button surfaces if already enabled.
+    api.getSettings().then((s) => this.applySettings(s || {})).catch(() => {});
+  }
+
+  applySettings(s) {
+    const debug = !!s.debug;
+    if (this.composerDebugBtn) this.composerDebugBtn.hidden = !debug;
   }
 
   mount(parent) {
@@ -108,6 +119,10 @@ export class ChatView {
     if (this._onAgentsRefresh) {
       document.removeEventListener('grok-remote:agents-refresh', this._onAgentsRefresh);
       this._onAgentsRefresh = null;
+    }
+    if (this._onSettingsChange) {
+      window.removeEventListener('grok-remote:settings-change', this._onSettingsChange);
+      this._onSettingsChange = null;
     }
   }
 
@@ -282,6 +297,8 @@ export class ChatView {
       title: 'Preview the exact JSON payload that will be sent (composer + attachments), plus the last server-composed prompt if one exists.',
       onclick: (ev) => { ev.preventDefault(); this.openPayloadInspector(); },
     }, '{ payload }');
+    // Hidden by default; surfaced when settings.debug is true.
+    debugBtn.hidden = true;
     this.composerDebugBtn = debugBtn;
 
     // Caption row used to show the slash-command hint after a commit.

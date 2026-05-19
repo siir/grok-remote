@@ -275,6 +275,21 @@ body::before {
   font-size: 11px;
   cursor: pointer;
 }
+/* Highlight the "+ new" button when the sidebar has no agents yet, so a
+   first-time user has a clear next step. */
+.sidebar:has(.agents-empty) .agents-new-btn,
+.agents-new-btn--pulse {
+  border-style: solid;
+  border-color: var(--teal);
+  background: rgba(94, 234, 212, 0.10);
+  box-shadow: 0 0 0 0 rgba(94, 234, 212, 0.55);
+  animation: new-pulse 2s ease-in-out infinite;
+}
+@keyframes new-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(94, 234, 212, 0.45); }
+  60%  { box-shadow: 0 0 0 6px rgba(94, 234, 212, 0);    }
+  100% { box-shadow: 0 0 0 0   rgba(94, 234, 212, 0);    }
+}
 .agents-new-btn:hover {
   background: rgba(94, 234, 212, 0.06);
 }
@@ -340,7 +355,8 @@ body::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.agent-kill {
+.agent-kill,
+.agent-archive {
   background: transparent;
   border: none;
   color: var(--dim);
@@ -349,7 +365,67 @@ body::before {
   cursor: pointer;
   padding: 0 4px;
 }
-.agent-kill:hover { color: var(--red); }
+.agent-kill:hover,
+.agent-archive:hover { color: var(--amber); }
+
+/* Star toggle */
+.agent-star {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.agent-star:hover { color: var(--amber); }
+.agent-star.is-on { color: var(--amber); }
+
+/* Archived view */
+.agents-archived-toggle {
+  margin-top: 6px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.agents-archived-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--border-2); }
+.agents-archived-toggle:disabled { color: var(--dim); cursor: default; }
+
+.agents-list--archived {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.agent-item--archived { opacity: 0.7; }
+.agent-item--archived:hover { opacity: 1; }
+.agent-item--archived .agent-name { color: var(--muted); }
+.agent-item--starred .agent-name { color: var(--amber); }
+
+/* Restore / delete-forever buttons inside archived items */
+.agent-archived-actions {
+  display: flex;
+  gap: 4px;
+}
+.agent-restore,
+.agent-delete-forever {
+  background: transparent;
+  border: 1px solid var(--border-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.agent-restore:hover { color: var(--teal); border-color: var(--teal); }
+.agent-delete-forever:hover { color: var(--red); border-color: var(--red); }
 .agent-item-meta {
   display: flex;
   align-items: center;
@@ -1524,6 +1600,11 @@ body::before {
   .tabs-spacer { flex: 1 1 auto; min-width: 8px; }
   .tab-action { padding: 5px 8px; font-size: 11px; }
 
+  /* Slim brand on mobile: only the "GR" mark stays visible.
+     Save horizontal space for the hamburger + status pill. */
+  .brand-name,
+  .brand-version { display: none; }
+
   /* Composer extras row: pills + attach button + send/cancel never overflow */
   .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) 10px; }
 
@@ -1558,8 +1639,7 @@ body::before {
     gap: 6px;
   }
   .topbar-right { gap: 8px; }
-  .brand-version { display: none; }
-  .brand-name { font-size: 13px; }
+  /* (brand-name + brand-version already hidden at 720px) */
   .intro { padding: 18px 14px 6px; }
   .figlet { font-size: 13px; }
   .chat-stream { padding: 12px 12px; }

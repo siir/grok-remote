@@ -36,6 +36,7 @@ export const api = {
   getAgent:     (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}`),
   createAgent:  (body)        => request('POST',   '/api/agents', body || {}),
   deleteAgent:  (id)          => request('DELETE', `/api/agents/${encodeURIComponent(id)}`),
+  updateAgent:  (id, patch)   => request('PATCH',  `/api/agents/${encodeURIComponent(id)}`, patch || {}),
   disconnect:   (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/disconnect`),
   connect:      (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/connect`),
   prompt:       (id, textOrOpts) => {
