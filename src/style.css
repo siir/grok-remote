@@ -1972,6 +1972,118 @@ body::before {
   cursor: not-allowed;
 }
 
+/* "{ payload }" debug button */
+.composer-debug {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.composer-debug:hover { color: var(--teal); }
+
+/* Payload inspector modal */
+.payload-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.payload-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(7, 9, 12, 0.7);
+}
+.payload-modal-card {
+  position: relative;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: min(960px, 100%);
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+.payload-modal-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.payload-modal-head h2 {
+  grid-column: 1;
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: var(--teal);
+}
+.payload-modal-hint {
+  grid-column: 1;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.4;
+}
+.payload-close {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
+}
+.payload-modal-body {
+  overflow: auto;
+  padding: 12px 18px 18px;
+  min-height: 0;
+}
+.payload-section + .payload-section { margin-top: 18px; }
+.payload-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.payload-section-head h3 {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.payload-copy {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+.payload-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 50vh;
+  overflow: auto;
+  color: var(--text);
+}
+.payload-empty {
+  color: var(--dim);
+  font-size: 12px;
+  padding: 12px;
+}
+@media (max-width: 720px) {
+  .payload-modal { padding: 12px; }
+  .payload-modal-card { max-height: calc(100dvh - 24px); }
+  .payload-modal-head { padding: 12px 14px; }
+  .payload-modal-body { padding: 10px 14px 14px; }
+  .payload-pre { font-size: 11.5px; max-height: 60vh; }
+}
+
 /* preview pills row */
 .attach-pills {
   display: flex;

@@ -201,8 +201,11 @@ async function handleApi(req, res, url, method) {
             return sendJson(res, 400, { ok: false, error: 'attachment.dataBase64 required' });
           }
         }
-        await manager.prompt(id, { text: hasText ? text : '', attachments });
-        return sendJson(res, 202, { ok: true, accepted: true });
+        const result = await manager.prompt(id, { text: hasText ? text : '', attachments });
+        // Echo back what the server actually composed (final text after the
+        // attachment block was appended, list of saved files, sessionId, etc.)
+        // so the UI inspector can show the full server-side view.
+        return sendJson(res, 202, { ok: true, accepted: true, debug: result?.debug || null });
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err.message });
       }

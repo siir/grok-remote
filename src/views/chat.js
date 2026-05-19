@@ -276,6 +276,14 @@ export class ChatView {
       onclick: (ev) => { ev.preventDefault(); fileInput.click(); },
     }, 'attach image');
 
+    const debugBtn = el('button', {
+      class: 'btn btn--ghost composer-debug',
+      type: 'button',
+      title: 'Preview the exact JSON payload that will be sent (composer + attachments), plus the last server-composed prompt if one exists.',
+      onclick: (ev) => { ev.preventDefault(); this.openPayloadInspector(); },
+    }, '{ payload }');
+    this.composerDebugBtn = debugBtn;
+
     // Caption row used to show the slash-command hint after a commit.
     const hintCaption = el('div', { class: 'composer-hint hidden' });
 
@@ -295,6 +303,7 @@ export class ChatView {
       ta,
       el('div', { class: 'composer-actions' },
         attachBtn,
+        debugBtn,
         fileInput,
         cancelBtn,
         sendBtn,
@@ -813,6 +822,10 @@ export class ChatView {
     const attachments = this.imageAttach ? this.imageAttach.getAttachments() : [];
     if (!text && !attachments.length) return;
 
+    // Snapshot the payload for the inspector before clearing the composer.
+    this._lastPayload = this._buildPayloadSnapshot(text, attachments);
+    this._lastServerEcho = null;
+
     this.composerTa.value = '';
     if (this.composerHint) {
       this.composerHint.classList.add('hidden');
@@ -825,12 +838,139 @@ export class ChatView {
     this.composerCancel.disabled = false;
 
     try {
-      await api.prompt(this.agentId, { text, attachments });
+      const resp = await api.prompt(this.agentId, { text, attachments });
+      this._lastServerEcho = resp && typeof resp === 'object' ? resp : null;
       if (this.imageAttach) this.imageAttach.clear();
     } catch (e) {
       this.activeTurn && this.activeTurn.root.appendChild(renderErrorBanner(e.message));
       this.endTurn(null);
     }
+  }
+
+  _buildPayloadSnapshot(text, attachments) {
+    // Build the same body shape api.prompt would send, so the inspector
+    // shows the exact wire payload (base64 included).
+    const safeAttachments = (attachments || []).map(a => ({
+      kind:       a.kind || 'image',
+      name:       a.name || null,
+      mimeType:   a.mimeType || null,
+      size:       a.size || null,
+      dataBase64: a.dataBase64 || '',
+    }));
+    const body = { text };
+    if (safeAttachments.length) body.attachments = safeAttachments;
+    return {
+      method:  'POST',
+      url:     `/api/agents/${this.agentId}/prompt`,
+      body,
+      sentAt:  new Date().toISOString(),
+    };
+  }
+
+  openPayloadInspector() {
+    // Build a "current draft" snapshot from the composer + attachments so
+    // the inspector works both before send (preview) and after send (echo).
+    const text = this.composerTa ? this.composerTa.value : '';
+    const attachments = this.imageAttach ? this.imageAttach.getAttachments() : [];
+    const draftPayload = (text.trim() || attachments.length)
+      ? this._buildPayloadSnapshot(text.trim(), attachments)
+      : null;
+
+    if (this._payloadModal) {
+      try { this._payloadModal.remove(); } catch { /* ignore */ }
+      this._payloadModal = null;
+    }
+
+    const close = () => {
+      if (this._payloadModal) {
+        try { this._payloadModal.remove(); } catch { /* ignore */ }
+        this._payloadModal = null;
+      }
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+
+    const dumpBlock = (title, value, opts = {}) => {
+      const pretty = value == null ? 'null' : JSON.stringify(value, null, 2);
+      const view = pretty.length > 20000 && !opts.full
+        ? this._truncateBase64(pretty)
+        : pretty;
+      const pre = el('pre', { class: 'payload-pre' }, view);
+      const copyBtn = el('button', {
+        class: 'btn btn--ghost payload-copy',
+        type: 'button',
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(pretty);
+            this.showToast('payload copied', 'info');
+          } catch (e) {
+            this.showToast(`copy failed: ${e.message}`, 'warn');
+          }
+        },
+      }, 'copy');
+      return el('section', { class: 'payload-section' },
+        el('header', { class: 'payload-section-head' },
+          el('h3', null, title),
+          copyBtn,
+        ),
+        pre,
+      );
+    };
+
+    const sections = [];
+    if (draftPayload) {
+      sections.push(dumpBlock(
+        'composer draft (would be sent on click)',
+        draftPayload,
+      ));
+    }
+    if (this._lastPayload) {
+      sections.push(dumpBlock(
+        'last sent request body',
+        this._lastPayload,
+      ));
+    }
+    if (this._lastServerEcho) {
+      sections.push(dumpBlock(
+        'server response (echoed back, after attachment processing)',
+        this._lastServerEcho,
+      ));
+    }
+    if (!sections.length) {
+      sections.push(el('div', { class: 'payload-empty' },
+        'No payload yet. Type or attach something, then click here to preview,',
+        ' or send a message and reopen this panel to see the actual request.'));
+    }
+
+    const closeBtn = el('button', {
+      class: 'btn btn--ghost payload-close',
+      type: 'button',
+      onclick: close,
+    }, 'close');
+
+    const modal = el('div', { class: 'payload-modal' },
+      el('div', { class: 'payload-modal-backdrop', onclick: close }),
+      el('div', { class: 'payload-modal-card' },
+        el('header', { class: 'payload-modal-head' },
+          el('h2', null, 'Outgoing prompt payload'),
+          el('div', { class: 'payload-modal-hint' },
+            'Base64 image data is truncated in the view; the copy button copies the FULL payload to your clipboard.'),
+          closeBtn,
+        ),
+        el('div', { class: 'payload-modal-body' }, ...sections),
+      ),
+    );
+    this._payloadModal = modal;
+    document.body.appendChild(modal);
+  }
+
+  _truncateBase64(pretty) {
+    // Replace long dataBase64 strings inline with a "<NNN bytes>" placeholder
+    // so the panel stays readable. The copy button still copies the original.
+    return pretty.replace(/"dataBase64": "([A-Za-z0-9+/=]{200,})"/g, (_m, b64) => {
+      return `"dataBase64": "<base64, ${b64.length} chars; copied in full when you click copy>"`;
+    });
   }
 
   async cancel() {
