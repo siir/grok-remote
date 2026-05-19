@@ -1,0 +1,14 @@
+{
+  "name": "Grok Remote",
+  "short_name": "GR",
+  "description": "Manage grok agents over your tailnet.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07090c",
+  "theme_color": "#5eead4",
+  "icons": [
+    {"src":"/icon-192.svg","sizes":"192x192","type":"image/svg+xml","purpose":"any"},
+    {"src":"/icon-512.svg","sizes":"512x512","type":"image/svg+xml","purpose":"any"},
+    {"src":"/icon-mask.svg","sizes":"512x512","type":"image/svg+xml","purpose":"maskable"}
+  ]
+}

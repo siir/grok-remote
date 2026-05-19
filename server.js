@@ -85,7 +85,7 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function readJsonBody(req, limitBytes = 1024 * 1024) {
+async function readJsonBody(req, limitBytes = 32 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let total = 0;
     const chunks = [];
@@ -181,10 +181,34 @@ async function handleApi(req, res, url, method) {
       try {
         const body = await readJsonBody(req);
         const text = body?.text;
-        if (typeof text !== 'string' || !text.length) {
-          return sendJson(res, 400, { ok: false, error: 'text required' });
+        const attachments = Array.isArray(body?.attachments) ? body.attachments : [];
+        const hasText = typeof text === 'string' && text.length > 0;
+        if (!hasText && !attachments.length) {
+          return sendJson(res, 400, { ok: false, error: 'text or attachments required' });
         }
-        await manager.prompt(id, text);
+        // Validate attachment shape up front.
+        for (const att of attachments) {
+          if (!att || typeof att !== 'object') {
+            return sendJson(res, 400, { ok: false, error: 'invalid attachment' });
+          }
+          if (att.kind !== 'image') {
+            return sendJson(res, 400, { ok: false, error: `unsupported attachment kind: ${att.kind}` });
+          }
+          if (typeof att.mimeType !== 'string' || !att.mimeType.startsWith('image/')) {
+            return sendJson(res, 400, { ok: false, error: 'attachment.mimeType must be image/*' });
+          }
+          if (typeof att.dataBase64 !== 'string' || !att.dataBase64.length) {
+            return sendJson(res, 400, { ok: false, error: 'attachment.dataBase64 required' });
+          }
+        }
+        try {
+          await manager.prompt(id, { text: hasText ? text : '', attachments });
+        } catch (err) {
+          if (err && err.code === 'IMAGE_UNSUPPORTED') {
+            return sendJson(res, 400, { ok: false, error: 'Active model does not support images.' });
+          }
+          throw err;
+        }
         return sendJson(res, 202, { ok: true, accepted: true });
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err.message });
@@ -200,6 +224,9 @@ async function handleApi(req, res, url, method) {
       res.end(body);
       return;
     }
+    if (suffix === '/files' && method === 'GET') {
+      return handleFilesList(req, res, rec);
+    }
     if (suffix === '/stream' && method === 'GET') {
       return handleStream(req, res, id);
     }
@@ -207,6 +234,136 @@ async function handleApi(req, res, url, method) {
   }
 
   return sendJson(res, 404, { ok: false, error: 'not found' });
+}
+
+const FILE_MAX_BYTES = 256_000;
+
+function withinAgentScope(scopeDir, target) {
+  // Mirrors lib/fs-host.js: allow exact scope match or descendant.
+  const scope = path.resolve(scopeDir);
+  const resolved = path.resolve(target);
+  return resolved === scope || resolved.startsWith(scope + path.sep);
+}
+
+async function handleFilesList(req, res, rec) {
+  const cwd = rec && rec.cwd;
+  if (!cwd) return sendJson(res, 404, { ok: false, error: 'agent cwd missing' });
+
+  const urlObj = new URL(req.url, 'http://x');
+  const rel = urlObj.searchParams.get('path') || '';
+  const cleanRel = String(rel).replace(/^\/+/, '');
+
+  let target;
+  try {
+    target = path.resolve(cwd, cleanRel);
+  } catch {
+    return sendJson(res, 400, { ok: false, error: 'invalid path' });
+  }
+  if (!withinAgentScope(cwd, target)) {
+    return sendJson(res, 400, { ok: false, error: 'path escapes agent scope' });
+  }
+
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return sendJson(res, 404, { ok: false, error: 'path not found' });
+    }
+    return sendJson(res, 500, { ok: false, error: err.message });
+  }
+
+  if (stat.isDirectory()) {
+    let names;
+    try {
+      names = fs.readdirSync(target);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message });
+    }
+    const dirs = [];
+    const files = [];
+    for (const name of names) {
+      const full = path.join(target, name);
+      let s;
+      try { s = fs.lstatSync(full); }
+      catch { continue; }
+      const isHidden = name.startsWith('.');
+      if (s.isDirectory()) {
+        dirs.push({ name, type: 'directory', entries: null, isHidden });
+      } else if (s.isFile()) {
+        files.push({
+          name,
+          type: 'file',
+          size: s.size,
+          mtime: s.mtime.toISOString(),
+          isHidden,
+        });
+      } else {
+        // symlinks/other: report as file-ish
+        files.push({
+          name,
+          type: 'file',
+          size: s.size,
+          mtime: s.mtime.toISOString(),
+          isHidden,
+        });
+      }
+    }
+    const cmp = (a, b) => {
+      if (a.isHidden !== b.isHidden) return a.isHidden ? 1 : -1;
+      return a.name.localeCompare(b.name);
+    };
+    dirs.sort(cmp);
+    files.sort(cmp);
+    return sendJson(res, 200, {
+      type: 'directory',
+      path: cleanRel,
+      entries: [...dirs, ...files],
+    });
+  }
+
+  if (stat.isFile()) {
+    if (stat.size > FILE_MAX_BYTES) {
+      return sendJson(res, 200, {
+        type: 'file',
+        path: cleanRel,
+        size: stat.size,
+        truncated: true,
+        content: null,
+        reason: 'too_large',
+      });
+    }
+    let buf;
+    try {
+      buf = fs.readFileSync(target);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message });
+    }
+    const sniff = buf.subarray(0, Math.min(512, buf.length));
+    let binary = false;
+    for (let i = 0; i < sniff.length; i++) {
+      if (sniff[i] === 0) { binary = true; break; }
+    }
+    if (binary) {
+      return sendJson(res, 200, {
+        type: 'file',
+        path: cleanRel,
+        size: stat.size,
+        binary: true,
+        content: null,
+      });
+    }
+    return sendJson(res, 200, {
+      type: 'file',
+      path: cleanRel,
+      size: stat.size,
+      binary: false,
+      mtime: stat.mtime.toISOString(),
+      content: buf.toString('utf8'),
+    });
+  }
+
+  return sendJson(res, 400, { ok: false, error: 'unsupported file type' });
 }
 
 function handleStream(req, res, id) {

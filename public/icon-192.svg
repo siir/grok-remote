@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0c1117"/>
+      <stop offset="100%" stop-color="#07090c"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5eead4"/>
+      <stop offset="100%" stop-color="#79c0ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="192" height="192" rx="36" ry="36" fill="url(#bg)"/>
+  <rect x="6" y="6" width="180" height="180" rx="32" ry="32" fill="none" stroke="#1c2530" stroke-width="2"/>
+  <text x="96" y="124"
+    text-anchor="middle"
+    font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+    font-weight="700"
+    font-size="88"
+    letter-spacing="2"
+    fill="url(#fg)">GR</text>
+</svg>

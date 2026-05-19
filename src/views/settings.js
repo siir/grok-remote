@@ -3,6 +3,7 @@
 
 import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
+import { THEMES, getTheme, setTheme } from '../lib/themes.js';
 
 export class SettingsView {
   constructor() {
@@ -13,10 +14,7 @@ export class SettingsView {
     this.modelSelect  = null;
     this.cwdInput     = el('input', { class: 'inp', type: 'text', placeholder: '/path/to/working/dir' });
     this.autoApprove  = el('input', { type: 'checkbox' });
-    this.themeSelect  = el('select', { class: 'inp', disabled: 'disabled' },
-      el('option', { value: 'dark' }, 'dark'),
-    );
-    this.themeSelect.value = 'dark';
+    this.themePicker = this.buildThemePicker();
 
     this.statusEl = el('div', { class: 'settings-status' });
 
@@ -50,8 +48,8 @@ export class SettingsView {
         'server already passes --always-approve. shown here for visibility.'),
 
       this.field('theme',
-        this.themeSelect,
-        'dark only for v1. more coming later.'),
+        this.themePicker,
+        'applies instantly. saved in this browser only.'),
 
       el('div', { class: 'settings-actions' }, this.saveBtn, this.reloadBtn),
     );
@@ -67,7 +65,18 @@ export class SettingsView {
 
   mount(parent) {
     parent.appendChild(this.root);
+    // Refresh the picker against any external theme changes (e.g. topbar toggle).
+    this.refreshThemePicker();
     this.load();
+  }
+
+  refreshThemePicker() {
+    const current = getTheme();
+    for (const [k, card] of Object.entries(this.themeCards || {})) {
+      card.classList.toggle('theme-card--selected', k === current);
+      const radio = card.querySelector('input[type="radio"]');
+      if (radio) radio.checked = (k === current);
+    }
   }
 
   async load() {
@@ -131,7 +140,9 @@ export class SettingsView {
         : (this.modelInput.value.trim() || null),
       defaultCwd:   this.cwdInput.value.trim() || null,
       autoApprove:  !!this.autoApprove.checked,
-      theme:        this.themeSelect.value,
+      // theme is persisted client-side in localStorage by setTheme(); we still
+      // forward it so server-side settings can mirror the preference if useful.
+      theme:        getTheme(),
     };
     this.saveBtn.disabled = true;
     this.setStatus('saving...', 'idle');
@@ -151,5 +162,45 @@ export class SettingsView {
       el('span', { class: `status-pill status-pill--${kind || 'idle'}` }, '·'),
       el('span', { class: 'settings-status-text' }, text),
     );
+  }
+
+  buildThemePicker() {
+    const current = getTheme();
+    const grid = el('div', { class: 'theme-grid' });
+    this.themeCards = {};
+    for (const t of THEMES) {
+      const isSel = t.name === current;
+      const card = el('label', {
+        class: `theme-card${isSel ? ' theme-card--selected' : ''}`,
+        dataset: { theme: t.name },
+      },
+        el('input', {
+          type: 'radio',
+          name: 'theme',
+          value: t.name,
+          checked: isSel ? 'checked' : null,
+          onchange: () => this.pickTheme(t.name),
+        }),
+        el('span', { class: 'theme-card-swatch', style: { background: t.swatch, borderColor: t.accent, color: t.accent } }, '●'),
+        el('span', { class: 'theme-card-body' },
+          el('span', { class: 'theme-card-name' }, t.label),
+          el('span', { class: 'theme-card-blurb' }, t.blurb),
+        ),
+      );
+      this.themeCards[t.name] = card;
+      grid.appendChild(card);
+    }
+    return grid;
+  }
+
+  pickTheme(name) {
+    setTheme(name);
+    for (const [k, card] of Object.entries(this.themeCards || {})) {
+      card.classList.toggle('theme-card--selected', k === name);
+      const radio = card.querySelector('input[type="radio"]');
+      if (radio) radio.checked = (k === name);
+    }
+    // notify the topbar toggle so its dot/label re-syncs.
+    window.dispatchEvent(new CustomEvent('grok-remote:theme-change', { detail: { theme: name } }));
   }
 }

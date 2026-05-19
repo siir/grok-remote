@@ -13,6 +13,9 @@
 
 import { api } from '../lib/api.js';
 import { openStream } from '../lib/sse.js';
+import { mountFilesTab, unmountFilesTab } from './files.js';
+import attachSlashPalette from '../lib/slash-palette.js';
+import { setupImageAttach } from '../lib/attach-images.js';
 import {
   el,
   renderUserBubble,
@@ -24,6 +27,7 @@ import {
   renderErrorBanner,
   renderToast,
 } from '../lib/render.js';
+import { copyToClipboard, serializeConversation, serializeResumeCommand } from '../lib/copy.js';
 
 export class ChatView {
   constructor() {
@@ -39,7 +43,8 @@ export class ChatView {
     this.tabsEl    = this.buildTabs();
     this.statusEl  = el('div', { class: 'chat-status' });
 
-    this.filesPane = el('div', { class: 'pane pane--files hidden' }, this.buildFilesPlaceholder());
+    this.filesPane = el('div', { class: 'pane pane--files hidden' });
+    this.filesMounted = false;
     this.infoPane  = el('div', { class: 'pane pane--info hidden' }, el('div', { class: 'pane-empty' }, 'no agent selected'));
 
     this.toastHost = el('div', { class: 'toast-host' });
@@ -65,6 +70,7 @@ export class ChatView {
 
     this.streamEl.appendChild(this.empty);
     this._setComposerEnabled(false);
+    this._attachComposerExtras();
 
     // visibility change -> refresh history on becoming visible
     this._onVisibility = () => {
@@ -81,6 +87,12 @@ export class ChatView {
 
   destroy() {
     this.closeStream();
+    if (this.filesMounted) {
+      unmountFilesTab();
+      this.filesMounted = false;
+    }
+    if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
+    if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
   }
 
@@ -95,16 +107,45 @@ export class ChatView {
       files:        make('files',        'Files'),
       info:         make('info',         'Info'),
     };
+    this.copyConvoBtn = el('button', {
+      class: 'tab-action tab-action--copy',
+      type: 'button',
+      title: 'Copy entire conversation as plain text',
+      onclick: () => this.copyConversation(),
+    }, 'copy conversation');
     return el('nav', { class: 'tabs' },
       this.tabBtns.conversation,
       this.tabBtns.files,
       this.tabBtns.info,
+      el('span', { class: 'tabs-spacer' }),
+      this.copyConvoBtn,
     );
   }
 
-  buildFilesPlaceholder() {
-    return el('div', { class: 'pane-empty' },
-      'file browser coming soon. for now, use a terminal in the agent cwd.');
+  async copyConversation() {
+    if (!this.agentId) {
+      this.showToast('no agent selected', 'warn');
+      return;
+    }
+    const text = serializeConversation(this.turns, { agent: this.currentAgent || { id: this.agentId } });
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      this.flashBtnLabel(this.copyConvoBtn, 'copied');
+      this.showToast('conversation copied to clipboard.', 'info');
+    } else {
+      this.showToast('copy failed', 'fail');
+    }
+  }
+
+  flashBtnLabel(btn, tempLabel) {
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = tempLabel;
+    btn.disabled = true;
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.disabled = false;
+    }, 1200);
   }
 
   switchTab(key) {
@@ -116,6 +157,22 @@ export class ChatView {
     if (convo) convo.classList.toggle('hidden', key !== 'conversation');
     this.filesPane.classList.toggle('hidden', key !== 'files');
     this.infoPane.classList.toggle('hidden', key !== 'info');
+
+    if (key === 'files') {
+      if (this.agentId) {
+        mountFilesTab(this.filesPane, { id: this.agentId });
+        this.filesMounted = true;
+      } else if (!this.filesMounted) {
+        this.filesPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+      }
+    } else if (this.filesMounted) {
+      unmountFilesTab();
+      this.filesMounted = false;
+    }
+
+    if (key === 'info') {
+      this.renderInfo(this.currentAgent);
+    }
   }
 
   buildComposer() {
@@ -129,7 +186,6 @@ export class ChatView {
           this.send();
         }
       },
-      oninput: (ev) => this.maybeShowPalette(ev.target),
     });
     const sendBtn = el('button', {
       class: 'btn btn--primary composer-send',
@@ -140,47 +196,147 @@ export class ChatView {
       onclick: () => this.cancel(),
     }, 'cancel turn');
 
-    this.composerTa = ta;
-    this.composerSend = sendBtn;
-    this.composerCancel = cancelBtn;
+    // Hidden file input used by the "attach image" button.
+    const fileInput = el('input', {
+      type: 'file',
+      class: 'composer-file-input',
+      accept: 'image/*',
+      multiple: '',
+      style: { display: 'none' },
+    });
+    const attachBtn = el('button', {
+      class: 'btn btn--ghost composer-attach',
+      title: 'Attach image',
+      onclick: (ev) => {
+        ev.preventDefault();
+        if (!this.imageAttach || !this.imageAttach.isSupported()) {
+          this.showToast('This model does not support image input.', 'warn');
+          return;
+        }
+        fileInput.click();
+      },
+    }, 'attach image');
+
+    // Caption row used to show the slash-command hint after a commit.
+    const hintCaption = el('div', { class: 'composer-hint hidden' });
+
+    this.composerTa        = ta;
+    this.composerSend      = sendBtn;
+    this.composerCancel    = cancelBtn;
+    this.composerFileInput = fileInput;
+    this.composerAttachBtn = attachBtn;
+    this.composerHint      = hintCaption;
+    // Kept around (hidden) for back-compat with any leftover CSS hooks; the
+    // new slash-palette module creates its own floating panel.
     this.palette = el('div', { class: 'command-palette hidden' });
 
     return el('div', { class: 'composer' },
       this.palette,
+      hintCaption,
       ta,
-      el('div', { class: 'composer-actions' }, cancelBtn, sendBtn),
+      el('div', { class: 'composer-actions' },
+        attachBtn,
+        fileInput,
+        cancelBtn,
+        sendBtn,
+      ),
     );
   }
 
-  maybeShowPalette(ta) {
-    const v = ta.value;
-    if (!v.startsWith('/')) {
-      this.palette.classList.add('hidden');
-      this.palette.replaceChildren();
-      return;
+  _attachComposerExtras() {
+    if (this._detachPalette) {
+      try { this._detachPalette(); } catch { /* ignore */ }
+      this._detachPalette = null;
     }
-    const q = v.slice(1).split(/\s/)[0].toLowerCase();
-    const matches = this.availableCommands.filter(c => !q || (c.name && c.name.toLowerCase().startsWith(q)));
-    if (!matches.length) {
-      this.palette.classList.add('hidden');
-      this.palette.replaceChildren();
-      return;
+    if (this.imageAttach) {
+      try { this.imageAttach.destroy(); } catch { /* ignore */ }
+      this.imageAttach = null;
     }
-    this.palette.replaceChildren(...matches.slice(0, 8).map(c =>
-      el('button', {
-        class: 'command-palette-item',
-        onclick: (ev) => {
-          ev.preventDefault();
-          ta.value = `/${c.name} `;
-          ta.focus();
-          this.palette.classList.add('hidden');
-        },
+    if (!this.composerTa) return;
+
+    this._detachPalette = attachSlashPalette({
+      textarea: this.composerTa,
+      getCommands: () => this.availableCommands,
+      onCommit: ({ command, hint }) => {
+        if (hint && this.composerHint) {
+          this.composerHint.textContent = `usage: /${command.name} ${hint}`;
+          this.composerHint.classList.remove('hidden');
+        } else if (this.composerHint) {
+          this.composerHint.classList.add('hidden');
+          this.composerHint.textContent = '';
+        }
       },
-        el('span', { class: 'cp-name' }, `/${c.name}`),
-        c.description ? el('span', { class: 'cp-desc' }, c.description) : null,
-      )
-    ));
-    this.palette.classList.remove('hidden');
+    });
+
+    this.imageAttach = setupImageAttach({
+      container: this.composerEl,
+      textarea: this.composerTa,
+      fileInput: this.composerFileInput,
+      canAttachImages: () => this._canAttachImages(),
+      onChange: ({ error }) => {
+        if (error) this.showToast(error, 'warn');
+        this._syncAttachBtn();
+      },
+    });
+    this._syncAttachBtn();
+  }
+
+  _canAttachImages() {
+    return !!this._promptCapImage;
+  }
+
+  _captureAgentCaps(agent) {
+    // Prefer top-level agentCapabilities (exposed by /api/agents); fall back
+    // to handshakeMeta.agentCapabilities for older shapes.
+    const direct = agent && (agent.agentCapabilities || agent.agent_capabilities);
+    let pc = direct && direct.promptCapabilities;
+    if (!pc) {
+      const meta = agent && (agent.handshakeMeta || agent.handshake_meta);
+      const meta_caps = meta && (meta.agentCapabilities || meta.agent_capabilities);
+      pc = meta_caps && meta_caps.promptCapabilities;
+    }
+    if (pc && typeof pc.image === 'boolean') {
+      this._promptCapImage = !!pc.image;
+    } else {
+      // Unknown for now; the agent record will be refreshed via the
+      // periodic agents-list poll in main.js, which will call setAgent
+      // again with updated caps.
+      this._promptCapImage = false;
+      // Best-effort: re-fetch shortly after spawn in case the handshake
+      // hadn't completed when we mounted.
+      if (agent && agent.id) {
+        clearTimeout(this._capsRetryTimer);
+        this._capsRetryTimer = setTimeout(() => this._refreshCapsLater(agent.id), 1200);
+      }
+    }
+    this._syncAttachBtn();
+    if (this.imageAttach) this.imageAttach.refreshSupport();
+  }
+
+  async _refreshCapsLater(agentId) {
+    if (this.agentId !== agentId) return;
+    try {
+      const fresh = await api.getAgent(agentId);
+      if (!fresh || this.agentId !== agentId) return;
+      const pc = (fresh.agentCapabilities && fresh.agentCapabilities.promptCapabilities)
+        || (fresh.handshakeMeta && fresh.handshakeMeta.agentCapabilities && fresh.handshakeMeta.agentCapabilities.promptCapabilities)
+        || null;
+      if (pc && typeof pc.image === 'boolean') {
+        const before = !!this._promptCapImage;
+        this._promptCapImage = !!pc.image;
+        if (before !== this._promptCapImage) {
+          this._syncAttachBtn();
+          if (this.imageAttach) this.imageAttach.refreshSupport();
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  _syncAttachBtn() {
+    if (!this.composerAttachBtn) return;
+    const ok = this._canAttachImages();
+    this.composerAttachBtn.disabled = !ok;
+    this.composerAttachBtn.classList.toggle('is-disabled', !ok);
   }
 
   setAvailableCommands(list) {
@@ -206,18 +362,39 @@ export class ChatView {
     this.palette.replaceChildren();
     this.toastHost.replaceChildren();
     this.composerTa.value = '';
+    if (this.composerHint) {
+      this.composerHint.classList.add('hidden');
+      this.composerHint.textContent = '';
+    }
+    if (this.imageAttach) this.imageAttach.clear();
+    this._promptCapImage = false;
+    this._syncAttachBtn();
+    if (agent) this._captureAgentCaps(agent);
+
+    if (this.filesMounted) {
+      unmountFilesTab();
+      this.filesMounted = false;
+    }
 
     if (!agent || !agent.id) {
       this.agentId = null;
       this.streamEl.appendChild(this.empty);
       this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+      this.filesPane.replaceChildren();
       this._setComposerEnabled(false);
       return;
     }
 
     this.agentId = agent.id;
+    this.currentAgent = agent;
+    this.latestTotalTokens = (agent && agent.totalTokens) || null;
     this._setComposerEnabled(true);
     this.composerCancel.disabled = true;
+
+    if (this.tabsState === 'files') {
+      mountFilesTab(this.filesPane, { id: this.agentId });
+      this.filesMounted = true;
+    }
 
     this.refreshHistory()
       .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
@@ -229,24 +406,95 @@ export class ChatView {
   }
 
   renderInfo(agent) {
+    if (!agent) {
+      this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+      return;
+    }
+    const sessionId = agent.sessionId || null;
+    const cwd       = agent.cwd       || '';
+    const totalToks = this.latestTotalTokens != null ? this.latestTotalTokens : (agent.totalTokens != null ? agent.totalTokens : null);
+
+    const truncate = (s, n) => {
+      if (!s) return '';
+      const str = String(s);
+      if (str.length <= n) return str;
+      return `${str.slice(0, Math.max(0, n - 1))}...`;
+    };
+    const copyValueBtn = (val, label) => {
+      const btn = el('button', {
+        class: 'info-copy',
+        type: 'button',
+        title: `Copy ${label}`,
+        onclick: async () => {
+          if (!val) return;
+          const ok = await copyToClipboard(val);
+          if (ok) {
+            this.flashBtnLabel(btn, 'copied');
+          }
+        },
+      }, 'copy');
+      if (!val) btn.disabled = true;
+      return btn;
+    };
+
     const rows = [
-      ['id',     agent.id],
-      ['name',   agent.name || '·'],
-      ['model',  agent.model || '·'],
-      ['status', agent.status || '·'],
-      ['cwd',    agent.cwd || '·'],
-      ['host',   agent.hostname || '·'],
-      ['version',agent.agentVersion || '·'],
+      ['name',     agent.name || '·'],
+      ['status',   agent.status || '·'],
+      ['model',    agent.model || '·'],
+      ['session',  sessionId || 'Pending handshake...', sessionId ? { copy: sessionId, truncated: truncate(sessionId, 32) } : null],
+      ['cwd',      cwd || '·',                          cwd       ? { copy: cwd,       truncated: truncate(cwd, 48)       } : null],
+      ['hostname', agent.hostname || '·'],
+      ['version',  agent.agentVersion || '·'],
+      ['agent id', agent.agentId || agent.id || '·'],
+      ['instance', agent.agentInstanceId || '·'],
+      ['created',  agent.createdAt || agent.created_at || '·'],
       ['lastSeen', agent.lastSeen || agent.last_seen || '·'],
+      ['tokens',   totalToks != null ? String(totalToks) : '·'],
     ];
-    this.infoPane.replaceChildren(
-      el('div', { class: 'info-grid' },
-        ...rows.flatMap(([k, v]) => [
-          el('div', { class: 'info-k' }, k),
-          el('div', { class: 'info-v' }, String(v)),
-        ])
+
+    const grid = el('div', { class: 'info-grid' });
+    for (const row of rows) {
+      const [k, v, copyOpt] = row;
+      grid.appendChild(el('div', { class: 'info-k' }, k));
+      if (copyOpt && copyOpt.copy) {
+        grid.appendChild(el('div', { class: 'info-v info-v--with-copy' },
+          el('span', { class: 'info-v-text', title: copyOpt.copy }, copyOpt.truncated || String(v)),
+          copyValueBtn(copyOpt.copy, k),
+        ));
+      } else {
+        grid.appendChild(el('div', { class: 'info-v' }, String(v)));
+      }
+    }
+
+    // Resume on CLI block
+    const resumeText = serializeResumeCommand({ sessionId, cwd });
+    const resumeBody = el('pre', { class: 'info-resume-body' }, resumeText);
+    const resumeBtn = el('button', {
+      class: 'btn btn--ghost info-resume-copy',
+      type: 'button',
+      onclick: async () => {
+        if (!sessionId) return;
+        const ok = await copyToClipboard(resumeText);
+        if (ok) {
+          this.flashBtnLabel(resumeBtn, 'copied');
+          this.showToast('resume command copied.', 'info');
+        }
+      },
+    }, 'copy resume command');
+    if (!sessionId) resumeBtn.disabled = true;
+
+    const resume = el('div', { class: 'info-resume' },
+      el('div', { class: 'info-resume-head' },
+        el('span', { class: 'info-resume-title' }, 'Resume on CLI'),
+        resumeBtn,
       ),
+      resumeBody,
+      !sessionId
+        ? el('div', { class: 'info-resume-hint' }, 'Session ID not yet assigned. The button enables once the agent finishes its handshake.')
+        : null,
     );
+
+    this.infoPane.replaceChildren(grid, resume);
   }
 
   async refreshHistory() {
@@ -317,6 +565,7 @@ export class ChatView {
     this.streamEl.appendChild(root);
     const turn = {
       user:      userBubble,
+      userText:  userText || '',
       thinking:  null,
       tools:     [],
       assistant: null,
@@ -357,6 +606,7 @@ export class ChatView {
       case 'tool_call_update':          return this.onToolCallUpdate(data);
       case 'tool_call_delta_chunk':     return this.onToolCallDelta(data);
       case 'available_commands_update': return this.onAvailableCommands(data);
+      case 'handshake':                 return this.onHandshake(data);
       case 'session_summary_generated': return this.onSessionSummary(data);
       case 'prompt_complete':           return this.onPromptComplete(data);
       case 'agent_status':              return this.onAgentStatus(data);
@@ -435,6 +685,25 @@ export class ChatView {
     if (Array.isArray(list)) this.setAvailableCommands(list);
   }
 
+  onHandshake(data) {
+    // Agent-manager forwards { meta, agentCapabilities } as the SSE payload.
+    const caps = data && (data.agentCapabilities || data.agent_capabilities);
+    const pc = caps && caps.promptCapabilities;
+    if (pc && typeof pc.image === 'boolean') {
+      const before = !!this._promptCapImage;
+      this._promptCapImage = !!pc.image;
+      if (before !== this._promptCapImage) {
+        this._syncAttachBtn();
+        if (this.imageAttach) this.imageAttach.refreshSupport();
+        // If the new model dropped image support, surface a clear warning.
+        const atts = this.imageAttach ? this.imageAttach.getAttachments() : [];
+        if (!this._promptCapImage && atts.length) {
+          this.showToast('Active model no longer supports image input. Remove attachments to send.', 'warn');
+        }
+      }
+    }
+  }
+
   onSessionSummary(data) {
     const text = (data && (data.summary || data.text)) || '';
     const pill = renderCompactedPill(text);
@@ -444,6 +713,21 @@ export class ChatView {
 
   onPromptComplete(data) {
     const meta = (data && data._meta) || data || {};
+    if (meta && (meta.totalTokens != null || meta.total_tokens != null)) {
+      this.latestTotalTokens = meta.totalTokens ?? meta.total_tokens;
+    }
+    // Capture sessionId/cwd from prompt_complete meta if the agent record is
+    // missing it (handshake metadata is sometimes delivered out of band).
+    if (this.currentAgent) {
+      if (meta.sessionId && !this.currentAgent.sessionId) {
+        this.currentAgent.sessionId = meta.sessionId;
+      }
+      if (meta.modelId && !this.currentAgent.model) {
+        this.currentAgent.model = meta.modelId;
+      }
+      // refresh the info pane if visible
+      if (this.tabsState === 'info') this.renderInfo(this.currentAgent);
+    }
     this.endTurn(meta);
   }
 
@@ -482,8 +766,19 @@ export class ChatView {
   async send() {
     if (!this.agentId) return;
     const text = this.composerTa.value.trim();
-    if (!text) return;
+    const attachments = this.imageAttach ? this.imageAttach.getAttachments() : [];
+    if (!text && !attachments.length) return;
+
+    if (attachments.length && !this._canAttachImages()) {
+      this.showToast('This model does not support image input. Remove the attachments first.', 'warn');
+      return;
+    }
+
     this.composerTa.value = '';
+    if (this.composerHint) {
+      this.composerHint.classList.add('hidden');
+      this.composerHint.textContent = '';
+    }
     this.palette.classList.add('hidden');
 
     // Start a turn locally and let the SSE stream fill in the rest.
@@ -491,7 +786,8 @@ export class ChatView {
     this.composerCancel.disabled = false;
 
     try {
-      await api.prompt(this.agentId, text);
+      await api.prompt(this.agentId, { text, attachments });
+      if (this.imageAttach) this.imageAttach.clear();
     } catch (e) {
       this.activeTurn && this.activeTurn.root.appendChild(renderErrorBanner(e.message));
       this.endTurn(null);

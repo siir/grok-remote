@@ -13,6 +13,33 @@ import { AgentsSidebar } from './views/agents.js';
 import { ChatView } from './views/chat.js';
 import { SettingsView } from './views/settings.js';
 import { el } from './lib/render.js';
+import { registerPwa } from './lib/pwa.js';
+import { applyTheme, getTheme, nextTheme, getThemeMeta } from './lib/themes.js';
+
+// Apply persisted theme as early as possible (before any DOM is drawn) so the
+// dashboard never flashes the default palette.
+applyTheme(getTheme());
+
+function syncThemeToggle(name) {
+  const meta = getThemeMeta(name);
+  const dot   = document.getElementById('theme-toggle-dot');
+  const label = document.getElementById('theme-toggle-label');
+  const btn   = document.getElementById('theme-toggle');
+  if (dot)   dot.style.background = meta.accent;
+  if (label) label.textContent = meta.label;
+  if (btn)   btn.title = `theme: ${meta.label} (click to cycle)`;
+}
+
+// React to setTheme calls from elsewhere (e.g. Settings picker).
+window.addEventListener('storage', (ev) => {
+  if (ev.key === 'grok-remote.theme') {
+    applyTheme(getTheme());
+    syncThemeToggle(getTheme());
+  }
+});
+window.addEventListener('grok-remote:theme-change', () => {
+  syncThemeToggle(getTheme());
+});
 
 // ── intro animation ────────────────────────────────────────────────────
 
@@ -177,6 +204,27 @@ function navigate(hash) {
   }
 }
 
+// ── drawer (mobile sidebar) ────────────────────────────────────────────
+
+function openDrawer() {
+  document.body.setAttribute('data-drawer-open', '');
+  const btn = document.getElementById('hamburger-btn');
+  if (btn) btn.setAttribute('aria-expanded', 'true');
+  const bd = document.getElementById('drawer-backdrop');
+  if (bd) bd.hidden = false;
+}
+function closeDrawer() {
+  document.body.removeAttribute('data-drawer-open');
+  const btn = document.getElementById('hamburger-btn');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+  const bd = document.getElementById('drawer-backdrop');
+  if (bd) bd.hidden = true;
+}
+function toggleDrawer() {
+  if (document.body.hasAttribute('data-drawer-open')) closeDrawer();
+  else openDrawer();
+}
+
 // ── dashboard mount ────────────────────────────────────────────────────
 
 function mountDashboard() {
@@ -210,6 +258,7 @@ function mountDashboard() {
     settingsBtn.addEventListener('click', (ev) => {
       ev.preventDefault();
       navigate('#/settings');
+      closeDrawer();
     });
   }
   const brandLink = document.getElementById('brand-link');
@@ -217,8 +266,18 @@ function mountDashboard() {
     brandLink.addEventListener('click', (ev) => {
       ev.preventDefault();
       navigate('#/');
+      closeDrawer();
     });
   }
+
+  // close drawer when a sidebar agent is picked on narrow screens.
+  shell.addEventListener('click', (ev) => {
+    if (!document.body.hasAttribute('data-drawer-open')) return;
+    const target = ev.target;
+    if (target && target.closest && target.closest('.sidebar .agent-item')) {
+      closeDrawer();
+    }
+  });
 
   function renderRoute() {
     const route = parseRoute();
@@ -282,4 +341,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (topMark) topMark.textContent = 'GR';
 
   mountDashboard();
+
+  // wire the topbar theme toggle.
+  syncThemeToggle(getTheme());
+  const themeBtn = document.getElementById('theme-toggle');
+  if (themeBtn) {
+    themeBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const n = nextTheme(getTheme());
+      syncThemeToggle(n);
+      window.dispatchEvent(new CustomEvent('grok-remote:theme-change', { detail: { theme: n } }));
+    });
+  }
+
+  // wire mobile drawer affordances.
+  const ham = document.getElementById('hamburger-btn');
+  if (ham) {
+    ham.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      toggleDrawer();
+    });
+  }
+  const backdrop = document.getElementById('drawer-backdrop');
+  if (backdrop) {
+    backdrop.addEventListener('click', () => closeDrawer());
+  }
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && document.body.hasAttribute('data-drawer-open')) {
+      closeDrawer();
+    }
+  });
+
+  // wire PWA install banner + service worker.
+  registerPwa();
 });

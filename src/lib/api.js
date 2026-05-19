@@ -36,9 +36,22 @@ export const api = {
   getAgent:     (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}`),
   createAgent:  (body)        => request('POST',   '/api/agents', body || {}),
   deleteAgent:  (id)          => request('DELETE', `/api/agents/${encodeURIComponent(id)}`),
-  prompt:       (id, text)    => request('POST',   `/api/agents/${encodeURIComponent(id)}/prompt`, { text }),
+  prompt:       (id, textOrOpts) => {
+    // Backwards compat: a plain string still works.
+    const body = (textOrOpts && typeof textOrOpts === 'object')
+      ? {
+          text: String(textOrOpts.text || ''),
+          ...(Array.isArray(textOrOpts.attachments) && textOrOpts.attachments.length
+            ? { attachments: textOrOpts.attachments }
+            : {}),
+        }
+      : { text: String(textOrOpts || '') };
+    return request('POST', `/api/agents/${encodeURIComponent(id)}/prompt`, body);
+  },
   cancel:       (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/cancel`),
   history:      (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}/history`),
+  listFiles:    (id, path)    => request('GET',    `/api/agents/${encodeURIComponent(id)}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  readFile:     (id, path)    => request('GET',    `/api/agents/${encodeURIComponent(id)}/files?path=${encodeURIComponent(path)}`),
 
   getSettings:  ()            => request('GET',    '/api/settings'),
   patchSettings:(body)        => request('PATCH',  '/api/settings', body),
