@@ -739,8 +739,10 @@ body::before {
   to   { transform: translateX(0);   opacity: 1; }
 }
 
-/* composer */
+/* composer: pinned to the bottom of the conversation pane; never grows or
+   shrinks with conversation length (only the chat stream above it scrolls). */
 .composer {
+  flex: 0 0 auto;
   border-top: 1px solid var(--border);
   background: var(--bg-soft);
   padding: 10px 14px;
@@ -760,6 +762,7 @@ body::before {
   line-height: 1.4;
   resize: vertical;
   min-height: 56px;
+  max-height: 35vh;
   outline: none;
   transition: border-color 0.15s;
 }
@@ -1184,6 +1187,56 @@ body::before {
 }
 .files-code-line {
   white-space: pre;
+}
+
+/* HTML preview: source/preview toggle + sandboxed iframe + popout button */
+.files-html-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 320px;
+}
+.files-html-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+.files-html-spacer { flex: 1; }
+.files-html-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.files-html-tab.is-active {
+  color: var(--text);
+  border-color: var(--teal);
+  background: rgba(94, 234, 212, 0.06);
+}
+.files-html-popout {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--blue);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.files-html-popout:hover { border-color: var(--blue); }
+.files-html-iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: white;
+  min-height: 320px;
 }
 
 @media (max-width: 720px) {

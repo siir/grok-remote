@@ -282,6 +282,23 @@ function renderViewerContents(state, res) {
   }
 
   const content = String(res.content || '');
+
+  if (isHtmlPath(state.selectedFile)) {
+    renderHtmlViewer(state, header, content);
+    return;
+  }
+
+  state.viewerBody.replaceChildren(
+    header,
+    buildCodeBlock(content),
+  );
+}
+
+function isHtmlPath(p) {
+  return /\.(html?|xhtml)$/i.test(String(p || ''));
+}
+
+function buildCodeBlock(content) {
   const lines = content.length ? content.split('\n') : [''];
   const gutter = el('div', { class: 'files-code-gutter' });
   const body = el('div', { class: 'files-code-body' });
@@ -293,11 +310,70 @@ function renderViewerContents(state, res) {
   }
   gutter.innerHTML = gutterHtml;
   body.innerHTML = bodyHtml;
+  return el('pre', { class: 'files-code' }, gutter, body);
+}
+
+function renderHtmlViewer(state, header, content) {
+  if (!state.htmlMode) state.htmlMode = 'preview';
+
+  const sourceBtn = el('button', {
+    class: `files-html-tab${state.htmlMode === 'source' ? ' is-active' : ''}`,
+    type: 'button',
+    onclick: () => { state.htmlMode = 'source'; renderHtmlViewer(state, header, content); },
+  }, 'Source');
+
+  const previewBtn = el('button', {
+    class: `files-html-tab${state.htmlMode === 'preview' ? ' is-active' : ''}`,
+    type: 'button',
+    onclick: () => { state.htmlMode = 'preview'; renderHtmlViewer(state, header, content); },
+  }, 'Preview');
+
+  const popoutBtn = el('button', {
+    class: 'files-html-popout',
+    type: 'button',
+    title: 'Open in a new browser tab',
+    onclick: () => openHtmlInNewTab(content),
+  }, 'Open in new tab');
+
+  const toolbar = el('div', { class: 'files-html-toolbar' },
+    sourceBtn,
+    previewBtn,
+    el('span', { class: 'files-html-spacer' }),
+    popoutBtn,
+  );
+
+  let body;
+  if (state.htmlMode === 'preview') {
+    // sandbox attr: allow scripts, forms, popups; deny allow-same-origin so
+    // the page cannot reach the dashboard's cookies, storage, or DOM.
+    const iframe = document.createElement('iframe');
+    iframe.className = 'files-html-iframe';
+    iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-modals');
+    iframe.setAttribute('referrerpolicy', 'no-referrer');
+    iframe.srcdoc = content;
+    body = iframe;
+  } else {
+    body = buildCodeBlock(content);
+  }
 
   state.viewerBody.replaceChildren(
-    header,
-    el('pre', { class: 'files-code' }, gutter, body),
+    el('div', { class: 'files-html-wrap' },
+      header,
+      toolbar,
+      body,
+    ),
   );
+}
+
+function openHtmlInNewTab(content) {
+  try {
+    const blob = new Blob([content], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    alert(`Could not open preview: ${e.message}`);
+  }
 }
 
 export default mountFilesTab;
