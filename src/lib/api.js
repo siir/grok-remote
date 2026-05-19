@@ -52,6 +52,7 @@ export const api = {
   history:      (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}/history`),
   listFiles:    (id, path)    => request('GET',    `/api/agents/${encodeURIComponent(id)}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   readFile:     (id, path)    => request('GET',    `/api/agents/${encodeURIComponent(id)}/files?path=${encodeURIComponent(path)}`),
+  fileRawUrl:   (id, p)       => `/api/agents/${encodeURIComponent(id)}/files/raw?path=${encodeURIComponent(p || '')}`,
 
   getSettings:  ()            => request('GET',    '/api/settings'),
   patchSettings:(body)        => request('PATCH',  '/api/settings', body),

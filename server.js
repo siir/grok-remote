@@ -220,6 +220,9 @@ async function handleApi(req, res, url, method) {
     if (suffix === '/files' && method === 'GET') {
       return handleFilesList(req, res, rec);
     }
+    if (suffix === '/files/raw' && (method === 'GET' || method === 'HEAD')) {
+      return handleFilesRaw(req, res, rec, method);
+    }
     if (suffix === '/stream' && method === 'GET') {
       return handleStream(req, res, id);
     }
@@ -357,6 +360,145 @@ async function handleFilesList(req, res, rec) {
   }
 
   return sendJson(res, 400, { ok: false, error: 'unsupported file type' });
+}
+
+const RAW_MAX_BYTES = 200 * 1024 * 1024; // 200 MB
+
+const RAW_MIME = {
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif':  'image/gif',
+  '.webp': 'image/webp',
+  '.svg':  'image/svg+xml',
+  '.bmp':  'image/bmp',
+  '.ico':  'image/x-icon',
+  '.mp4':  'video/mp4',
+  '.webm': 'video/webm',
+  '.mov':  'video/quicktime',
+  '.ogv':  'video/ogg',
+  '.m4v':  'video/x-m4v',
+  '.mp3':  'audio/mpeg',
+  '.wav':  'audio/wav',
+  '.ogg':  'audio/ogg',
+  '.m4a':  'audio/mp4',
+  '.flac': 'audio/flac',
+  '.pdf':  'application/pdf',
+  '.txt':  'text/plain; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+};
+
+function parseRange(headerVal, size) {
+  // Returns { start, end } (inclusive) or null if absent;
+  // returns { unsatisfiable: true } if malformed/out-of-range.
+  if (!headerVal || typeof headerVal !== 'string') return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(headerVal.trim());
+  if (!m) return { unsatisfiable: true };
+  const startStr = m[1];
+  const endStr = m[2];
+  let start;
+  let end;
+  if (startStr === '' && endStr === '') return { unsatisfiable: true };
+  if (startStr === '') {
+    // suffix: last N bytes
+    const n = parseInt(endStr, 10);
+    if (!Number.isFinite(n) || n <= 0) return { unsatisfiable: true };
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = parseInt(startStr, 10);
+    end = endStr === '' ? size - 1 : parseInt(endStr, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return { unsatisfiable: true };
+  }
+  if (start > end || start < 0 || end >= size) return { unsatisfiable: true };
+  return { start, end };
+}
+
+function handleFilesRaw(req, res, rec, method) {
+  const cwd = rec && rec.cwd;
+  if (!cwd) return sendJson(res, 404, { ok: false, error: 'agent cwd missing' });
+
+  const urlObj = new URL(req.url, 'http://x');
+  const rel = urlObj.searchParams.get('path') || '';
+  const cleanRel = String(rel).replace(/^\/+/, '');
+
+  let target;
+  try {
+    target = path.resolve(cwd, cleanRel);
+  } catch {
+    return sendJson(res, 400, { ok: false, error: 'invalid path' });
+  }
+  if (!withinAgentScope(cwd, target)) {
+    return sendJson(res, 400, { ok: false, error: 'path escapes agent scope' });
+  }
+
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return sendJson(res, 404, { ok: false, error: 'path not found' });
+    }
+    return sendJson(res, 500, { ok: false, error: err.message });
+  }
+
+  if (stat.isDirectory()) {
+    return sendJson(res, 400, { ok: false, error: 'path is a directory' });
+  }
+  if (!stat.isFile()) {
+    return sendJson(res, 400, { ok: false, error: 'unsupported file type' });
+  }
+  if (stat.size > RAW_MAX_BYTES) {
+    res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'file too large' }));
+    return;
+  }
+
+  const ext = path.extname(target).toLowerCase();
+  const contentType = RAW_MIME[ext] || 'application/octet-stream';
+  const lastModified = stat.mtime.toUTCString();
+
+  const rangeHeader = req.headers['range'];
+  const parsed = parseRange(rangeHeader, stat.size);
+  if (parsed && parsed.unsatisfiable) {
+    res.writeHead(416, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Range': `bytes */${stat.size}`,
+    });
+    res.end(JSON.stringify({ ok: false, error: 'range not satisfiable' }));
+    return;
+  }
+
+  if (parsed) {
+    const { start, end } = parsed;
+    const chunkLen = end - start + 1;
+    res.writeHead(206, {
+      'Content-Type': contentType,
+      'Content-Length': String(chunkLen),
+      'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+      'Last-Modified': lastModified,
+    });
+    if (method === 'HEAD') { res.end(); return; }
+    const stream = fs.createReadStream(target, { start, end });
+    stream.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
+    stream.pipe(res);
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': String(stat.size),
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+    'Last-Modified': lastModified,
+  });
+  if (method === 'HEAD') { res.end(); return; }
+  const stream = fs.createReadStream(target);
+  stream.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
+  stream.pipe(res);
 }
 
 function handleStream(req, res, id) {

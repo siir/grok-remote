@@ -226,6 +226,13 @@ async function openFile(state, filePath) {
   state.viewerBody.replaceChildren(el('div', { class: 'files-loading' }, 'loading...'));
   state.root.classList.add('files--show-viewer');
   state.backBtn.classList.remove('hidden');
+
+  // For image / video / audio, skip the JSON read and stream the raw URL.
+  if (isImagePath(filePath) || isVideoPath(filePath) || isAudioPath(filePath)) {
+    renderMediaViewer(state, filePath);
+    return;
+  }
+
   try {
     const res = await api.readFile(state.agent.id, filePath);
     if (state.destroyed) return;
@@ -237,6 +244,64 @@ async function openFile(state, filePath) {
       el('div', { class: 'files-error' }, `error: ${msg}`)
     );
   }
+}
+
+function isImagePath(p) { return /\.(png|jpe?g|gif|webp|bmp|ico|svg)$/i.test(String(p || '')); }
+function isVideoPath(p) { return /\.(mp4|webm|mov|ogv|m4v)$/i.test(String(p || '')); }
+function isAudioPath(p) { return /\.(mp3|wav|ogg|m4a|flac)$/i.test(String(p || '')); }
+
+function basename(p) {
+  const cleaned = String(p || '').replace(/\/+$/, '');
+  const i = cleaned.lastIndexOf('/');
+  return i < 0 ? cleaned : cleaned.slice(i + 1);
+}
+
+function renderMediaViewer(state, filePath) {
+  const rawUrl = api.fileRawUrl(state.agent.id, filePath);
+
+  const popoutBtn = el('button', {
+    class: 'files-html-popout',
+    type: 'button',
+    title: 'Open in a new browser tab',
+    onclick: () => window.open(rawUrl, '_blank', 'noopener,noreferrer'),
+  }, 'Open in new tab');
+
+  const toolbar = el('div', { class: 'files-media-toolbar' },
+    el('span', { class: 'files-media-name' }, basename(filePath)),
+    el('span', { class: 'files-html-spacer' }),
+    popoutBtn,
+  );
+
+  let media;
+  if (isImagePath(filePath)) {
+    const img = document.createElement('img');
+    img.className = 'files-media-image';
+    img.src = rawUrl;
+    img.alt = basename(filePath);
+    media = img;
+  } else if (isVideoPath(filePath)) {
+    const video = document.createElement('video');
+    video.className = 'files-media-video';
+    video.controls = true;
+    video.preload = 'metadata';
+    video.src = rawUrl;
+    media = video;
+  } else {
+    // audio
+    const audio = document.createElement('audio');
+    audio.className = 'files-media-audio';
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = rawUrl;
+    media = audio;
+  }
+
+  state.viewerBody.replaceChildren(
+    el('div', { class: 'files-media-wrap' },
+      toolbar,
+      media,
+    ),
+  );
 }
 
 function renderViewer(state) {
