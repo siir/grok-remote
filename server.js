@@ -228,9 +228,17 @@ async function handleApi(req, res, url, method) {
       }
     }
     if (suffix === '/history' && method === 'GET') {
-      const body = readHistory(id);
-      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
-      res.end(body);
+      const urlObj = new URL(req.url, 'http://x');
+      const all = urlObj.searchParams.get('all') === '1';
+      const turnsParam = parseInt(urlObj.searchParams.get('turns') || '50', 10);
+      const turns = Number.isFinite(turnsParam) && turnsParam > 0 ? turnsParam : 50;
+      const sliced = sliceHistoryByTurns(readHistory(id) || '', { all, turns });
+      res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'X-Total-Turns': String(sliced.totalTurns),
+        'X-Returned-Turns': String(sliced.returnedTurns),
+      });
+      res.end(sliced.text);
       return;
     }
     if (suffix === '/files' && method === 'GET') {
@@ -246,6 +254,29 @@ async function handleApi(req, res, url, method) {
   }
 
   return sendJson(res, 404, { ok: false, error: 'not found' });
+}
+
+// Return the last `turns` turns from a JSONL history string. A "turn" starts
+// at each user_message event. If `all` is true the full history is returned.
+function sliceHistoryByTurns(raw, { all, turns }) {
+  if (!raw) return { text: '', totalTurns: 0, returnedTurns: 0 };
+  const lines = raw.split('\n').filter(Boolean);
+  const userMessageIndices = [];
+  for (let i = 0; i < lines.length; i++) {
+    // Cheap pre-check before JSON.parse on long lines.
+    if (lines[i].indexOf('"user_message"') === -1) continue;
+    try {
+      const obj = JSON.parse(lines[i]);
+      if (obj && obj.event === 'user_message') userMessageIndices.push(i);
+    } catch { /* skip malformed */ }
+  }
+  const totalTurns = userMessageIndices.length;
+  if (all || totalTurns <= turns) {
+    return { text: lines.join('\n') + (lines.length ? '\n' : ''), totalTurns, returnedTurns: totalTurns };
+  }
+  const cutoffLineIdx = userMessageIndices[totalTurns - turns];
+  const sliced = lines.slice(cutoffLineIdx);
+  return { text: sliced.join('\n') + '\n', totalTurns, returnedTurns: turns };
 }
 
 const FILE_MAX_BYTES = 256_000;

@@ -520,26 +520,47 @@ export class ChatView {
     this.infoPane.replaceChildren(grid, resume);
   }
 
-  async refreshHistory() {
+  async refreshHistory({ all = false, turns = 50 } = {}) {
     if (!this.agentId) return;
+    this._historyAll = !!all;
     try {
-      const hist = await api.history(this.agentId);
-      // Best-effort: server may return a list of events or a list of turns.
-      // We expect an array of SSE-like events: { event, data }.
-      const events = Array.isArray(hist) ? hist : (hist && Array.isArray(hist.events) ? hist.events : []);
-      if (!events.length) return;
+      const hist = await api.history(this.agentId, { turns, all });
+      const events = (hist && Array.isArray(hist.events)) ? hist.events : [];
       this.streamEl.replaceChildren();
       this.turns = [];
       this.activeTurn = null;
+      // If there are older turns we didn't load, show a banner at the top.
+      const total = (hist && hist.totalTurns) || 0;
+      const returned = (hist && hist.returnedTurns) || 0;
+      if (!all && total > returned && returned > 0) {
+        this.streamEl.appendChild(this._buildLoadEarlierBanner(total - returned));
+      }
       for (const ev of events) {
         const name = ev.event || ev.type || ev.name;
         const data = ev.data || ev.payload || ev;
         if (!name) continue;
         this.handleEvent(name, data, { fromHistory: true });
       }
+      // Scroll the stream to the bottom after a history load.
+      requestAnimationFrame(() => {
+        this.streamEl.scrollTop = this.streamEl.scrollHeight;
+      });
     } catch (e) {
       // backend may not implement history yet
     }
+  }
+
+  _buildLoadEarlierBanner(missingCount) {
+    const btn = el('button', {
+      class: 'history-load-more-btn',
+      type: 'button',
+      onclick: async () => {
+        btn.disabled = true;
+        btn.textContent = 'loading...';
+        await this.refreshHistory({ all: true });
+      },
+    }, `load all earlier turns (${missingCount} more)`);
+    return el('div', { class: 'history-load-more' }, btn);
   }
 
   openStreamForCurrent() {
