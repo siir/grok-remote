@@ -15,3 +15,8 @@ yarn-error.log*
 # personal drafts (tweets, scratch notes)
 tweet.md
 scratch.md
+
+# protocol probe captures: contain hostname + home paths. probe.js stays.
+experiments/*.log
+experiments/exp*-out.txt
+experiments/exp*-prompt.txt

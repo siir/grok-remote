@@ -2,7 +2,7 @@
 
 What the backend has to speak, and what the frontend has to render. Captured from probing `grok agent stdio` (ACP / JSON-RPC) against grok 0.1.212.
 
-Raw experiment logs are in `experiments/exp1.log` (simple text reply) and `experiments/exp2.log` (tool-call attempt). `experiments/probe.js` is the test harness.
+Run `experiments/probe.js "<your prompt>" <out.log>` to regenerate fresh traces against your local `grok` install. The captures from our original probing aren't checked in because they include the developer's hostname and home paths.
 
 ---
 

@@ -257,7 +257,12 @@ npm run dev           # Vite dev server on :7911, proxies /api → 7910
 - Backend is plain Node http. Modules: `lib/{acp-client,agent-manager,terminal-host,fs-host,permission-host,sse,history,settings}.js`.
 - No external runtime deps. Vite is the only devDependency.
 
-`experiments/` contains the original probe script and captured ACP traces (`exp1.log`, `exp2.log`) used to design the protocol layer. Read those first if you want to understand the JSON-RPC dance.
+`experiments/probe.js` is a small standalone ACP client (~120 lines) that talks to `grok agent stdio` and dumps every JSON-RPC frame to a log file. Run it to regenerate the traces summarized in [PROTOCOL.md](./PROTOCOL.md):
+
+```sh
+node experiments/probe.js "Reply with the word ack." exp1.log
+node experiments/probe.js "Run \`ls\` and tell me what you see." exp2.log
+```
 
 ---
 
