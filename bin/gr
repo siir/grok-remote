@@ -1,0 +1,326 @@
+#!/usr/bin/env node
+// gr - grok-remote CLI shortcut.
+//
+// Smart default (no args): if running, show the tailnet URL and offer to open it;
+// if stopped, restart; if not installed, run the installer.
+//
+// Subcommands: status, open, url, start, stop, restart, logs, install, help, version.
+
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, realpathSync, readFileSync, statSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import readline from 'node:readline';
+
+// ─── colors (match installer.js palette) ─────────────────────────────────
+const COLOR = !process.env.NO_COLOR && (
+  process.env.FORCE_COLOR === '1' ||
+  process.stdout.isTTY
+);
+const rgb = (r, g, b) => COLOR ? `\x1b[38;2;${r};${g};${b}m` : '';
+const bold = COLOR ? '\x1b[1m' : '';
+const dim  = COLOR ? '\x1b[2m' : '';
+const reset = COLOR ? '\x1b[0m' : '';
+
+const TEAL = rgb(94, 234, 212);
+const BLUE = rgb(121, 192, 255);
+const GOOD = rgb(134, 239, 172);
+const WARN = rgb(251, 191, 36);
+const BAD  = rgb(255, 123, 114);
+const MUT  = rgb(134, 147, 164);
+const DIM  = rgb(74, 83, 96);
+const WHITE = rgb(232, 240, 248);
+
+const write   = (s) => process.stdout.write(s);
+const writeLn = (s = '') => process.stdout.write(s + '\n');
+
+// ─── locate install directory ────────────────────────────────────────────
+function findInstallDir() {
+  // 1. env var
+  if (process.env.GR_HOME) {
+    const p = process.env.GR_HOME;
+    if (existsSync(path.join(p, 'ecosystem.config.cjs'))) return p;
+  }
+  // 2. walk up from realpath of this script
+  let here;
+  try {
+    here = realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    here = fileURLToPath(import.meta.url);
+  }
+  // bin/gr -> project root is two parents up (gr -> bin/ -> root)
+  const candidates = [
+    path.resolve(path.dirname(here), '..'),
+    path.resolve(path.dirname(here), '..', '..'),
+  ];
+  for (const c of candidates) {
+    if (existsSync(path.join(c, 'ecosystem.config.cjs'))) return c;
+  }
+  return null;
+}
+
+const INSTALL_DIR = findInstallDir();
+
+function dieNoInstallDir() {
+  writeLn(`${BAD}error${reset} cannot locate grok-remote install directory.`);
+  writeLn(`${MUT}  tried GR_HOME and walking up from this script.${reset}`);
+  writeLn(`${MUT}  set GR_HOME=/path/to/grok-remote and try again.${reset}`);
+  process.exit(1);
+}
+
+// ─── shell helpers ───────────────────────────────────────────────────────
+function tryCmd(cmd, args, opts = {}) {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts });
+  return { ok: r.status === 0, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim(), code: r.status };
+}
+function runInherit(cmd, args, opts = {}) {
+  const r = spawnSync(cmd, args, { stdio: 'inherit', ...opts });
+  return r.status === 0;
+}
+function which(cmd) {
+  const r = spawnSync('which', [cmd], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : '';
+}
+
+// ─── PM2 process lookup ──────────────────────────────────────────────────
+// Returns null if pm2 not installed or grok-remote not in jlist.
+function getPM2Record() {
+  if (!which('pm2')) return null;
+  const r = tryCmd('pm2', ['jlist']);
+  if (!r.ok) return null;
+  let arr;
+  try { arr = JSON.parse(r.stdout); } catch { return null; }
+  if (!Array.isArray(arr)) return null;
+  return arr.find(p => p && p.name === 'grok-remote') || null;
+}
+
+// ─── port resolution from ecosystem.config.cjs ───────────────────────────
+function getAppPort() {
+  if (!INSTALL_DIR) return 7910;
+  try {
+    const txt = readFileSync(path.join(INSTALL_DIR, 'ecosystem.config.cjs'), 'utf8');
+    const m = txt.match(/PORT\s*:\s*(\d+)/);
+    if (m) return parseInt(m[1], 10);
+  } catch {}
+  return 7910;
+}
+
+// ─── tailnet URL ─────────────────────────────────────────────────────────
+function getTailnetURL() {
+  const port = getAppPort();
+  const r = tryCmd('tailscale', ['status', '--json']);
+  if (r.ok) {
+    try {
+      const parsed = JSON.parse(r.stdout);
+      const self = parsed.Self || {};
+      const dns = (self.DNSName || '').replace(/\.$/, '');
+      const ip = (self.TailscaleIPs && self.TailscaleIPs[0]) || '';
+      if (dns) return { url: `http://${dns}:${port}`, dns, ip, port };
+      if (ip)  return { url: `http://${ip}:${port}`,  dns: '', ip, port };
+    } catch {}
+  }
+  return { url: `http://localhost:${port}`, dns: '', ip: '', port };
+}
+
+// ─── version ─────────────────────────────────────────────────────────────
+function getVersion() {
+  if (!INSTALL_DIR) return 'unknown';
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(INSTALL_DIR, 'package.json'), 'utf8'));
+    return pkg.version || 'unknown';
+  } catch { return 'unknown'; }
+}
+
+// ─── formatting helpers ──────────────────────────────────────────────────
+function formatUptime(ms) {
+  if (!ms || ms < 0) return '0s';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d${h % 24}h`;
+}
+function formatMem(bytes) {
+  if (!bytes) return '0M';
+  return `${(bytes / 1024 / 1024).toFixed(1)}M`;
+}
+function statusColor(status) {
+  if (status === 'online')  return GOOD;
+  if (status === 'stopped') return WARN;
+  if (status === 'errored') return BAD;
+  return MUT;
+}
+
+// ─── subcommands ─────────────────────────────────────────────────────────
+function cmdHelp() {
+  writeLn(`${TEAL}${bold}gr${reset} ${MUT}- grok-remote control${reset}`);
+  writeLn();
+  writeLn(`${MUT}usage:${reset} ${BLUE}gr${reset} ${DIM}[command]${reset}`);
+  writeLn();
+  const rows = [
+    ['(no args)',  'smart default: open dashboard, restart, or install'],
+    ['status',     'show pm2 status, uptime, memory, url'],
+    ['open',       'open the tailnet URL in the default browser'],
+    ['url',        'print only the URL (for piping)'],
+    ['start',      'pm2 start ecosystem.config.cjs'],
+    ['stop',       'pm2 stop grok-remote'],
+    ['restart',    'pm2 restart grok-remote'],
+    ['logs',       'pm2 logs grok-remote --lines 100'],
+    ['install',    'run the installer'],
+    ['version',    'print the grok-remote version'],
+    ['help',       'show this help'],
+  ];
+  const w = Math.max(...rows.map(([k]) => k.length));
+  for (const [k, v] of rows) {
+    writeLn(`  ${BLUE}${k.padEnd(w)}${reset}  ${MUT}${v}${reset}`);
+  }
+  writeLn();
+  if (INSTALL_DIR) writeLn(`${DIM}install dir: ${INSTALL_DIR}${reset}`);
+}
+
+function cmdVersion() {
+  writeLn(getVersion());
+}
+
+function cmdUrl() {
+  const { url } = getTailnetURL();
+  writeLn(url);
+}
+
+function openInBrowser(url) {
+  const cmd = process.platform === 'darwin' ? 'open'
+            : process.platform === 'win32'  ? 'start'
+            : 'xdg-open';
+  return runInherit(cmd, [url]);
+}
+
+function cmdOpen() {
+  const { url } = getTailnetURL();
+  writeLn(`${MUT}opening${reset} ${BLUE}${url}${reset}`);
+  if (!openInBrowser(url)) {
+    writeLn(`${BAD}could not launch browser${reset}`);
+    process.exit(1);
+  }
+}
+
+function cmdStatus() {
+  if (!INSTALL_DIR) dieNoInstallDir();
+  const rec = getPM2Record();
+  const { url, dns, ip, port } = getTailnetURL();
+  if (!rec) {
+    writeLn(`${WARN}grok-remote is not registered with pm2.${reset}`);
+    writeLn(`${MUT}run${reset} ${BLUE}gr install${reset} ${MUT}or${reset} ${BLUE}gr start${reset}`);
+    process.exit(2);
+  }
+  const env = rec.pm2_env || {};
+  const monit = rec.monit || {};
+  const st = env.status || 'unknown';
+  const uptimeMs = env.pm_uptime ? (Date.now() - env.pm_uptime) : 0;
+  const restarts = env.restart_time ?? env.unstable_restarts ?? 0;
+  writeLn(`${TEAL}${bold}grok-remote${reset} ${DIM}(pm_id=${rec.pm_id})${reset}`);
+  const pad = (k) => `${MUT}${k.padEnd(9)}${reset}`;
+  writeLn(`  ${pad('status')}${statusColor(st)}${st}${reset}`);
+  writeLn(`  ${pad('uptime')}${WHITE}${st === 'online' ? formatUptime(uptimeMs) : '-'}${reset}`);
+  writeLn(`  ${pad('restarts')}${WHITE}${restarts}${reset}`);
+  writeLn(`  ${pad('memory')}${WHITE}${formatMem(monit.memory)}${reset}`);
+  writeLn(`  ${pad('cpu')}${WHITE}${monit.cpu ?? 0}%${reset}`);
+  writeLn(`  ${pad('url')}${BLUE}${url}${reset}`);
+  if (dns) writeLn(`  ${pad('dns')}${WHITE}${dns}${reset}`);
+  if (ip)  writeLn(`  ${pad('ip')}${WHITE}${ip}${reset}`);
+}
+
+function cmdStart() {
+  if (!INSTALL_DIR) dieNoInstallDir();
+  const ok = runInherit('pm2', ['start', 'ecosystem.config.cjs'], { cwd: INSTALL_DIR });
+  process.exit(ok ? 0 : 1);
+}
+
+function cmdStop() {
+  const ok = runInherit('pm2', ['stop', 'grok-remote']);
+  process.exit(ok ? 0 : 1);
+}
+
+function cmdRestart() {
+  const ok = runInherit('pm2', ['restart', 'grok-remote']);
+  process.exit(ok ? 0 : 1);
+}
+
+function cmdLogs() {
+  const ok = runInherit('pm2', ['logs', 'grok-remote', '--lines', '100']);
+  process.exit(ok ? 0 : 1);
+}
+
+function cmdInstall() {
+  if (!INSTALL_DIR) dieNoInstallDir();
+  const ok = runInherit('node', [path.join(INSTALL_DIR, 'installer.js')], { cwd: INSTALL_DIR });
+  process.exit(ok ? 0 : 1);
+}
+
+function prompt(question) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (ans) => { rl.close(); resolve(ans.trim()); });
+  });
+}
+
+async function cmdDefault() {
+  if (!INSTALL_DIR) {
+    // Not even able to locate the install dir, fall back to installer if env var hints.
+    writeLn(`${WARN}grok-remote install directory not found.${reset}`);
+    writeLn(`${MUT}set GR_HOME=/path/to/grok-remote or run from the project.${reset}`);
+    process.exit(1);
+  }
+  const rec = getPM2Record();
+  if (!rec) {
+    // not installed
+    writeLn(`${MUT}grok-remote is not installed under pm2. running installer...${reset}`);
+    cmdInstall();
+    return;
+  }
+  const st = rec.pm2_env?.status || 'unknown';
+  if (st !== 'online') {
+    writeLn(`${MUT}grok-remote is ${statusColor(st)}${st}${reset}${MUT}. restarting...${reset}`);
+    const ok = runInherit('pm2', ['restart', 'grok-remote']);
+    process.exit(ok ? 0 : 1);
+    return;
+  }
+  // online: show url and offer to open
+  const { url } = getTailnetURL();
+  writeLn(`${GOOD}● online${reset}  ${BLUE}${bold}${url}${reset}`);
+  if (process.stdin.isTTY) {
+    const ans = await prompt(`${MUT}open in browser? [Y/n] ${reset}`);
+    if (ans === '' || /^y(es)?$/i.test(ans)) {
+      openInBrowser(url);
+    }
+  }
+}
+
+// ─── dispatch ────────────────────────────────────────────────────────────
+const cmd = (process.argv[2] || '').toLowerCase();
+(async () => {
+  switch (cmd) {
+    case '':            await cmdDefault(); break;
+    case 'help':
+    case '-h':
+    case '--help':      cmdHelp(); break;
+    case 'version':
+    case '-v':
+    case '--version':   cmdVersion(); break;
+    case 'status':      cmdStatus(); break;
+    case 'open':        cmdOpen(); break;
+    case 'url':         cmdUrl(); break;
+    case 'start':       cmdStart(); break;
+    case 'stop':        cmdStop(); break;
+    case 'restart':     cmdRestart(); break;
+    case 'logs':        cmdLogs(); break;
+    case 'install':     cmdInstall(); break;
+    default:
+      writeLn(`${BAD}unknown command:${reset} ${cmd}`);
+      writeLn(`${MUT}try${reset} ${BLUE}gr help${reset}`);
+      process.exit(1);
+  }
+})();

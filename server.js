@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // grok-remote server
 //
-// Serves the built Vite dashboard plus a tiny /api surface. Designed to sit
-// on your tailnet so you can reach it from any device you own. The
-// remote-agent endpoints land here later.
+// Serves the built Vite dashboard plus the /api surface. Designed to sit on
+// your tailnet so you can reach it from any device you own. The
+// remote-agent endpoints live below.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -11,6 +11,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
+
+import { AgentManager } from './lib/agent-manager.js';
+import { load as loadSettings, save as saveSettings } from './lib/settings.js';
+import { readAll as readHistory } from './lib/history.js';
+import { writeHeaders as sseHeaders, writeEvent as sseWrite, writePing as ssePing } from './lib/sse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -34,6 +39,8 @@ const MIME = {
   '.woff2':'font/woff2',
   '.ttf':  'font/ttf',
 };
+
+const manager = new AgentManager();
 
 function safeJoin(base, rel) {
   const target = path.resolve(base, '.' + rel);
@@ -73,13 +80,45 @@ function serveStatic(req, res) {
   fs.createReadStream(target).pipe(res);
 }
 
-function api(req, res) {
-  const url = (req.url || '').split('?')[0];
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+}
 
-  if (url === '/api/hello') {
+async function readJsonBody(req, limitBytes = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let total = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > limitBytes) {
+        req.destroy();
+        reject(new Error('payload too large'));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw.length) return resolve({});
+      try { resolve(JSON.parse(raw)); }
+      catch (err) { reject(new Error(`invalid json: ${err.message}`)); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function matchAgentRoute(url) {
+  // Returns { id, suffix } or null
+  const m = url.match(/^\/api\/agents\/([^\/]+)(\/[^?]*)?$/);
+  if (!m) return null;
+  return { id: m[1], suffix: m[2] || '' };
+}
+
+async function handleApi(req, res, url, method) {
+  if (url === '/api/hello' && method === 'GET') {
     const ts = tailscaleIdentity();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+    return sendJson(res, 200, {
       ok: true,
       app: 'grok-remote',
       version: '0.1.0',
@@ -90,24 +129,117 @@ function api(req, res) {
       platform: process.platform,
       hostname: os.hostname(),
       tailscale: ts,
-    }, null, 2));
-    return true;
+    });
   }
 
-  if (url === '/api/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, uptime_seconds: Math.floor(process.uptime()) }));
-    return true;
+  if (url === '/api/health' && method === 'GET') {
+    return sendJson(res, 200, { ok: true, uptime_seconds: Math.floor(process.uptime()) });
   }
 
-  return false;
+  if (url === '/api/settings' && method === 'GET') {
+    return sendJson(res, 200, loadSettings());
+  }
+
+  if (url === '/api/settings' && method === 'PATCH') {
+    try {
+      const body = await readJsonBody(req);
+      const merged = saveSettings(body || {});
+      return sendJson(res, 200, merged);
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
+  if (url === '/api/agents' && method === 'GET') {
+    return sendJson(res, 200, manager.list());
+  }
+
+  if (url === '/api/agents' && method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const rec = await manager.spawn(body || {});
+      return sendJson(res, 201, rec);
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: err.message });
+    }
+  }
+
+  const route = matchAgentRoute(url);
+  if (route) {
+    const { id, suffix } = route;
+    const rec = manager.get(id);
+    if (!rec) return sendJson(res, 404, { ok: false, error: 'agent not found' });
+
+    if (suffix === '' && method === 'GET') {
+      return sendJson(res, 200, rec);
+    }
+    if (suffix === '' && method === 'DELETE') {
+      const ok = await manager.kill(id);
+      return sendJson(res, ok ? 200 : 404, { ok });
+    }
+    if (suffix === '/prompt' && method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const text = body?.text;
+        if (typeof text !== 'string' || !text.length) {
+          return sendJson(res, 400, { ok: false, error: 'text required' });
+        }
+        await manager.prompt(id, text);
+        return sendJson(res, 202, { ok: true, accepted: true });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message });
+      }
+    }
+    if (suffix === '/cancel' && method === 'POST') {
+      await manager.cancel(id);
+      return sendJson(res, 202, { ok: true, accepted: true });
+    }
+    if (suffix === '/history' && method === 'GET') {
+      const body = readHistory(id);
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
+      res.end(body);
+      return;
+    }
+    if (suffix === '/stream' && method === 'GET') {
+      return handleStream(req, res, id);
+    }
+    return sendJson(res, 404, { ok: false, error: 'not found' });
+  }
+
+  return sendJson(res, 404, { ok: false, error: 'not found' });
 }
 
-const server = http.createServer((req, res) => {
-  if ((req.url || '').startsWith('/api/')) {
-    if (api(req, res)) return;
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: false, error: 'not found' }));
+function handleStream(req, res, id) {
+  const ring = manager.ring(id);
+  if (!ring) return sendJson(res, 404, { ok: false, error: 'agent not found' });
+
+  sseHeaders(res);
+  const lastId = req.headers['last-event-id'];
+  for (const ev of ring.since(lastId)) {
+    sseWrite(res, ev);
+  }
+
+  const unsub = manager.subscribe(id, (ev) => sseWrite(res, ev));
+  const heartbeat = setInterval(() => ssePing(res), 15000);
+
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    try { unsub(); } catch { /* ignore */ }
+    if (!res.writableEnded) try { res.end(); } catch { /* ignore */ }
+  };
+
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = (req.url || '').split('?')[0];
+  if (url.startsWith('/api/')) {
+    try {
+      await handleApi(req, res, url, req.method || 'GET');
+    } catch (err) {
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: err.message });
+    }
     return;
   }
   serveStatic(req, res);
@@ -119,3 +251,15 @@ server.listen(PORT, HOST, () => {
   console.log(`[grok-remote] listening on ${HOST}:${PORT}`);
   console.log(`[grok-remote] tailnet url: ${where}`);
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[grok-remote] shutdown on ${signal}`);
+  try { await manager.shutdownAll(); } catch { /* ignore */ }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref?.();
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -459,6 +459,49 @@ async function stepSavePM2() {
   });
 }
 
+async function stepInstallGrCommand() {
+  return step('install gr command (global shortcut)', async () => {
+    const grPath = path.join(HERE, 'bin', 'gr');
+    if (!existsSync(grPath)) {
+      return { ok: false, detail: `bin/gr missing at ${grPath}` };
+    }
+    // chmod +x
+    try { spawnSync('chmod', ['+x', grPath]); } catch { /* best-effort */ }
+
+    const tryLink = (target) => {
+      try { mkdirSync(path.dirname(target), { recursive: true }); } catch {}
+      const r = spawnSync('ln', ['-sf', grPath, target], { encoding: 'utf8' });
+      return r.status === 0;
+    };
+
+    // 1. /usr/local/bin
+    const sysTarget = '/usr/local/bin/gr';
+    if (tryLink(sysTarget)) {
+      return { ok: true, detail: sysTarget };
+    }
+
+    // 2. ~/.local/bin (verify on PATH)
+    const userBin = path.join(os.homedir(), '.local', 'bin');
+    const userTarget = path.join(userBin, 'gr');
+    if (tryLink(userTarget)) {
+      const onPath = (process.env.PATH || '').split(path.delimiter).includes(userBin);
+      if (onPath) {
+        return { ok: true, detail: userTarget };
+      }
+      return {
+        ok: true, status: 'warn',
+        detail: `linked at ${userTarget}; add ~/.local/bin to PATH to use \`gr\``,
+      };
+    }
+
+    // 3. neither writable
+    return {
+      ok: true, status: 'warn',
+      detail: `link manually: ln -sf ${grPath} /usr/local/bin/gr`,
+    };
+  });
+}
+
 // ─── finale ──────────────────────────────────────────────────────────────
 async function finale() {
   const url = ctx.tailnetURL || `http://localhost:${ctx.appPort || 7910}`;
@@ -480,6 +523,8 @@ async function finale() {
   writeLn(frameMid(`${dim}pm2 restart grok-remote${reset} ${MUT}# restart${reset}`));
   writeLn(frameMid(`${dim}pm2 stop grok-remote${reset}    ${MUT}# stop${reset}`));
   writeLn(frameBot);
+  writeLn();
+  writeLn(`${TEAL}${bold}tip${reset}  run ${BLUE}gr${reset} from anywhere to check status, open the dashboard, or re-run setup.`);
   writeLn();
   writeLn(`${AMBR}⚠ Not affiliated with xAI, grok, or Tailscale.${reset}`);
   writeLn(`${MUT}Community tool. Reach your agent from anywhere on your tailnet.${reset}`);
@@ -504,6 +549,7 @@ async function main() {
     await stepWriteEcosystem();
     await stepStartPM2();
     await stepSavePM2();
+    await stepInstallGrCommand();
     await finale();
   } catch (e) {
     showCursor();

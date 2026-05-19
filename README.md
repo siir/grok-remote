@@ -81,6 +81,26 @@ pm2 save
 pm2 startup           # follow the instructions it prints
 ```
 
+## The `gr` command
+
+After `./install.sh`, the installer drops a `gr` shortcut on your PATH (via a symlink in `/usr/local/bin` or `~/.local/bin`). Run it from any directory.
+
+| Command       | What it does                                                          |
+|---------------|-----------------------------------------------------------------------|
+| `gr`          | Smart default: show the URL and offer to open it; restart if stopped; install if missing. |
+| `gr status`   | PM2 status, uptime, restarts, memory, cpu, tailnet URL.               |
+| `gr open`     | Open the tailnet URL in your default browser.                         |
+| `gr url`      | Print only the URL on stdout (pipe-friendly).                         |
+| `gr start`    | `pm2 start ecosystem.config.cjs` from the install dir.                |
+| `gr stop`     | `pm2 stop grok-remote`.                                               |
+| `gr restart`  | `pm2 restart grok-remote`.                                            |
+| `gr logs`     | `pm2 logs grok-remote --lines 100`.                                   |
+| `gr install`  | Re-run the installer.                                                 |
+| `gr version`  | Print the grok-remote version.                                        |
+| `gr help`     | Show the subcommand table.                                            |
+
+Set `GR_HOME` to override how `gr` locates the project; otherwise it follows the symlink back to the install directory.
+
 ## Develop
 
 ```sh
