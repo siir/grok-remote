@@ -1464,13 +1464,16 @@ body::before {
 }
 .hamburger:hover { border-color: var(--border-2); }
 
-/* drawer backdrop. */
+/* drawer backdrop.
+   No backdrop-filter: blur(): the GPU layer it forces on mobile WebKit
+   ended up rasterizing the sidebar's edge into the blur, making the
+   sidebar look frosted/blurry when the drawer was open. Plain dim
+   overlay is enough and renders crisp on every device. */
 .drawer-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
-  z-index: 9;
+  z-index: 30;
 }
 .drawer-backdrop[hidden] { display: none; }
 
@@ -1561,7 +1564,8 @@ body::before {
     left: 0;
     bottom: 0;
     width: min(82vw, 320px);
-    z-index: 10;
+    /* well above .drawer-backdrop (z-index 30) and the install banner */
+    z-index: 40;
     transform: translateX(-100%);
     transition: transform 0.22s ease;
     border-right: 1px solid var(--border);
@@ -1570,6 +1574,7 @@ body::before {
     padding-top: calc(14px + env(safe-area-inset-top));
     padding-bottom: calc(14px + env(safe-area-inset-bottom));
     overflow-y: auto;
+    /* fully opaque so the dimmed backdrop never bleeds through */
     background: var(--bg-soft);
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
   }
