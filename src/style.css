@@ -1613,6 +1613,28 @@ body::before {
   /* Composer extras row: pills + attach button + send/cancel never overflow */
   .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) 10px; }
 
+  /* Bigger, more readable type on phones. The desktop palette uses 14 px
+     body / 11-13 px chrome which feels cramped on a 6 inch screen. Bump
+     base text and the dense info rows; keep tiny chrome (icons, status
+     pills) the same since they're glyphs, not reading text. */
+  html, body         { font-size: 16px; }
+  .chat-stream       { font-size: 15px; line-height: 1.55; }
+  .agent-name        { font-size: 15px; }
+  .agent-item-meta   { font-size: 12.5px; }
+  .agent-status      { font-size: 12.5px; }
+  .agent-link        { font-size: 12.5px; }
+  .agent-cwd         { font-size: 11px; }
+  .tab               { font-size: 13px; padding: 8px 12px; }
+  .tab-action        { font-size: 12px; }
+  .chat-status       { font-size: 13px; min-height: 36px; }
+  .info-k, .info-v   { font-size: 13px; }
+  .tool-head         { font-size: 13px; }
+  .tool-status       { font-size: 12px; }
+  .chip              { font-size: 12px; }
+  .files-row-name    { font-size: 14px; }
+  .files-row-size    { font-size: 12px; }
+  .composer-hint     { font-size: 12px; }
+
   /* tool cards / info grid stack on narrow */
   .tool-head { flex-wrap: wrap; }
   .info-grid {
