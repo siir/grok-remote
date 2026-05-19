@@ -23,73 +23,45 @@ export class AgentsSidebar {
 
     this.list  = el('div', { class: 'agents-list' });
     this.empty = el('div', { class: 'agents-empty' }, 'no agents yet');
+    this.error = el('div', { class: 'agents-empty agents-empty--err' });
+    this.error.hidden = true;
+
     this.newBtn = el('button', {
       class: 'agents-new-btn',
-      onclick: () => this.toggleForm(true),
-    }, '+ new agent');
-
-    this.form = this.buildForm();
-    this.form.style.display = 'none';
+      title: 'spawn a new agent (auto-named from the first message)',
+      onclick: () => this.spawnNew(),
+    }, '+ new');
 
     this.root = el('aside', { class: 'sidebar' },
       el('div', { class: 'sidebar-head' },
         el('span', { class: 'sidebar-title' }, 'agents'),
         this.newBtn,
       ),
-      this.form,
+      this.error,
       this.list,
     );
   }
 
-  buildForm() {
-    const nameInput  = el('input', { class: 'inp', type: 'text', placeholder: 'name (optional)' });
-    const modelInput = el('input', { class: 'inp', type: 'text', placeholder: 'model (optional)' });
-    const cwdInput   = el('input', { class: 'inp', type: 'text', placeholder: 'cwd (optional)' });
-    const error      = el('div', { class: 'form-error' });
-
-    const submit = el('button', {
-      class: 'btn btn--primary',
-      onclick: async (ev) => {
-        ev.preventDefault();
-        error.textContent = '';
-        submit.disabled = true;
-        try {
-          const body = {};
-          if (nameInput.value.trim())  body.name  = nameInput.value.trim();
-          if (modelInput.value.trim()) body.model = modelInput.value.trim();
-          if (cwdInput.value.trim())   body.cwd   = cwdInput.value.trim();
-          const created = await api.createAgent(body);
-          nameInput.value = '';
-          modelInput.value = '';
-          cwdInput.value = '';
-          this.toggleForm(false);
-          if (typeof this.onCreate === 'function') this.onCreate(created);
-          await this.refresh();
-          if (created && created.id) this.select(created.id);
-        } catch (e) {
-          error.textContent = e.message || 'failed to create agent';
-        } finally {
-          submit.disabled = false;
-        }
-      },
-    }, 'spawn');
-
-    const cancel = el('button', {
-      class: 'btn btn--ghost',
-      onclick: (ev) => { ev.preventDefault(); this.toggleForm(false); },
-    }, 'cancel');
-
-    return el('form', { class: 'agents-form' },
-      nameInput,
-      modelInput,
-      cwdInput,
-      error,
-      el('div', { class: 'agents-form-actions' }, submit, cancel),
-    );
-  }
-
-  toggleForm(show) {
-    this.form.style.display = show ? '' : 'none';
+  async spawnNew() {
+    if (this._creating) return;
+    this._creating = true;
+    this.newBtn.disabled = true;
+    this.error.hidden = true;
+    const prevLabel = this.newBtn.textContent;
+    this.newBtn.textContent = 'spawning...';
+    try {
+      const created = await api.createAgent({});
+      if (typeof this.onCreate === 'function') this.onCreate(created);
+      await this.refresh();
+      if (created && created.id) this.select(created.id);
+    } catch (e) {
+      this.error.textContent = e.message || 'failed to spawn agent';
+      this.error.hidden = false;
+    } finally {
+      this._creating = false;
+      this.newBtn.disabled = false;
+      this.newBtn.textContent = prevLabel;
+    }
   }
 
   mount(parent) {

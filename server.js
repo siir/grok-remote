@@ -201,14 +201,7 @@ async function handleApi(req, res, url, method) {
             return sendJson(res, 400, { ok: false, error: 'attachment.dataBase64 required' });
           }
         }
-        try {
-          await manager.prompt(id, { text: hasText ? text : '', attachments });
-        } catch (err) {
-          if (err && err.code === 'IMAGE_UNSUPPORTED') {
-            return sendJson(res, 400, { ok: false, error: 'Active model does not support images.' });
-          }
-          throw err;
-        }
+        await manager.prompt(id, { text: hasText ? text : '', attachments });
         return sendJson(res, 202, { ok: true, accepted: true });
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err.message });

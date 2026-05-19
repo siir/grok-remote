@@ -206,15 +206,8 @@ export class ChatView {
     });
     const attachBtn = el('button', {
       class: 'btn btn--ghost composer-attach',
-      title: 'Attach image',
-      onclick: (ev) => {
-        ev.preventDefault();
-        if (!this.imageAttach || !this.imageAttach.isSupported()) {
-          this.showToast('This model does not support image input.', 'warn');
-          return;
-        }
-        fileInput.click();
-      },
+      title: 'Attach image (saved to agent uploads/ folder)',
+      onclick: (ev) => { ev.preventDefault(); fileInput.click(); },
     }, 'attach image');
 
     // Caption row used to show the slash-command hint after a commit.
@@ -286,57 +279,20 @@ export class ChatView {
   }
 
   _captureAgentCaps(agent) {
-    // Prefer top-level agentCapabilities (exposed by /api/agents); fall back
-    // to handshakeMeta.agentCapabilities for older shapes.
-    const direct = agent && (agent.agentCapabilities || agent.agent_capabilities);
-    let pc = direct && direct.promptCapabilities;
-    if (!pc) {
-      const meta = agent && (agent.handshakeMeta || agent.handshake_meta);
-      const meta_caps = meta && (meta.agentCapabilities || meta.agent_capabilities);
-      pc = meta_caps && meta_caps.promptCapabilities;
-    }
-    if (pc && typeof pc.image === 'boolean') {
-      this._promptCapImage = !!pc.image;
-    } else {
-      // Unknown for now; the agent record will be refreshed via the
-      // periodic agents-list poll in main.js, which will call setAgent
-      // again with updated caps.
-      this._promptCapImage = false;
-      // Best-effort: re-fetch shortly after spawn in case the handshake
-      // hadn't completed when we mounted.
-      if (agent && agent.id) {
-        clearTimeout(this._capsRetryTimer);
-        this._capsRetryTimer = setTimeout(() => this._refreshCapsLater(agent.id), 1200);
-      }
-    }
+    // Images are now always allowed: the backend saves attachments to the
+    // agent's uploads/ folder, so any model can use them via its own tools.
+    // We still track the model's native image capability for informational
+    // purposes (Info tab), but it no longer gates the attach button.
+    this._promptCapImage = true;
+    void agent;
     this._syncAttachBtn();
     if (this.imageAttach) this.imageAttach.refreshSupport();
   }
 
-  async _refreshCapsLater(agentId) {
-    if (this.agentId !== agentId) return;
-    try {
-      const fresh = await api.getAgent(agentId);
-      if (!fresh || this.agentId !== agentId) return;
-      const pc = (fresh.agentCapabilities && fresh.agentCapabilities.promptCapabilities)
-        || (fresh.handshakeMeta && fresh.handshakeMeta.agentCapabilities && fresh.handshakeMeta.agentCapabilities.promptCapabilities)
-        || null;
-      if (pc && typeof pc.image === 'boolean') {
-        const before = !!this._promptCapImage;
-        this._promptCapImage = !!pc.image;
-        if (before !== this._promptCapImage) {
-          this._syncAttachBtn();
-          if (this.imageAttach) this.imageAttach.refreshSupport();
-        }
-      }
-    } catch { /* ignore */ }
-  }
-
   _syncAttachBtn() {
     if (!this.composerAttachBtn) return;
-    const ok = this._canAttachImages();
-    this.composerAttachBtn.disabled = !ok;
-    this.composerAttachBtn.classList.toggle('is-disabled', !ok);
+    this.composerAttachBtn.disabled = false;
+    this.composerAttachBtn.classList.remove('is-disabled');
   }
 
   setAvailableCommands(list) {
@@ -768,11 +724,6 @@ export class ChatView {
     const text = this.composerTa.value.trim();
     const attachments = this.imageAttach ? this.imageAttach.getAttachments() : [];
     if (!text && !attachments.length) return;
-
-    if (attachments.length && !this._canAttachImages()) {
-      this.showToast('This model does not support image input. Remove the attachments first.', 'warn');
-      return;
-    }
 
     this.composerTa.value = '';
     if (this.composerHint) {

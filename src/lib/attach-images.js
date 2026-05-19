@@ -36,17 +36,20 @@ export function setupImageAttach({
 } = {}) {
   if (!container) throw new Error('setupImageAttach: container required');
 
-  const supported = typeof canAttachImages === 'function'
-    ? canAttachImages
-    : () => true;
+  // Attachments are always supported now: the server saves them to
+  // <cwd>/uploads/ and references them in the prompt text, so any model can
+  // see them through its file or terminal tools. The legacy callback is
+  // ignored and `supported()` always returns true.
+  const supported = () => true;
+  void canAttachImages;
 
   const pills = document.createElement('div');
   pills.className = 'attach-pills hidden';
   container.appendChild(pills);
 
+  // Notice element is kept but only used for transient errors (size, mime).
   const notice = document.createElement('div');
   notice.className = 'attach-notice hidden';
-  notice.textContent = 'This model does not support image input.';
   container.appendChild(notice);
 
   /** @type {{ id:string, kind:'image', name:string, size:number, mimeType:string, dataBase64:string, dataUrl:string }[]} */
@@ -117,14 +120,15 @@ export function setupImageAttach({
   }
 
   function renderNotice() {
-    const ok = supported();
-    if (!ok && (attachments.length > 0 || true)) {
-      notice.classList.remove('hidden');
-    } else {
-      notice.classList.add('hidden');
-    }
-    // Allow callers to hide notice when there's no agent (`supported` may
-    // return true by default); the host wires this via refreshSupport().
+    // Notice is only shown for transient errors (set via showError below).
+    notice.classList.add('hidden');
+    notice.textContent = '';
+  }
+  function showError(msg) {
+    notice.textContent = msg;
+    notice.classList.remove('hidden');
+    clearTimeout(showError._t);
+    showError._t = setTimeout(() => renderNotice(), 4000);
   }
 
   function removeAttachment(id) {
@@ -152,11 +156,6 @@ export function setupImageAttach({
   }
 
   async function addBlob(blob, suggestedName) {
-    if (!supported()) {
-      emitError('This model does not support image input.');
-      renderNotice();
-      return false;
-    }
     if (attachments.length >= MAX_ATTACHMENTS) {
       emitError(`Attachment limit (${MAX_ATTACHMENTS}) reached.`);
       return false;
