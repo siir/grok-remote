@@ -309,6 +309,80 @@ body::before {
   font-size: 11px;
   cursor: pointer;
 }
+
+/* Search + sort row */
+.sidebar-tools {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.sidebar-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-search-input {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 26px 6px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.sidebar-search-input::-webkit-search-cancel-button { display: none; }
+.sidebar-search-input:focus { border-color: var(--teal); }
+.sidebar-search-input::placeholder { color: var(--dim); }
+.sidebar-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+.sidebar-search-clear[hidden] { display: none; }
+.sidebar-search-clear:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.sidebar-sort {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  max-width: 130px;
+}
+.sidebar-sort:focus { outline: none; border-color: var(--teal); }
+
+/* Close-drawer button (mobile only; hidden on desktop) */
+.sidebar-close {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sidebar-close:hover { color: var(--text); border-color: var(--border-2); }
 /* Highlight the "+ new" button when the sidebar has no agents yet, so a
    first-time user has a clear next step. */
 .sidebar:has(.agents-empty) .agents-new-btn,
@@ -1546,42 +1620,67 @@ body::before {
 .drawer-backdrop[hidden] { display: none; }
 
 /* install banner — palette-matched, top on desktop. */
+/* Install banner: an honest alert, not a chip blended into the chrome.
+   Distinct teal-tinted background + thick left accent + stronger shadow so
+   the user knows it's an actionable message. */
 #install-banner {
   position: fixed;
   top: 10px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 12;
+  z-index: 50;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  background: var(--panel);
-  border: 1px solid rgba(94, 234, 212, 0.4);
-  border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  gap: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg,
+              rgba(94, 234, 212, 0.16) 0%,
+              rgba(15, 21, 28, 0.96) 100%);
+  border: 1px solid rgba(94, 234, 212, 0.45);
+  border-left: 4px solid var(--teal);
+  border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(94, 234, 212, 0.15);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   max-width: calc(100vw - 24px);
+  animation: install-banner-in 0.32s ease-out;
+}
+@keyframes install-banner-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0);    }
 }
 #install-banner[hidden] { display: none; }
+#install-banner [data-role="label"] {
+  flex: 1;
+  line-height: 1.4;
+  color: var(--text);
+}
+#install-banner [data-role="label"]::before {
+  content: "Install · ";
+  color: var(--teal);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
 #install-banner button {
   background: transparent;
   border: 1px solid var(--border-2);
   color: var(--muted);
   border-radius: 6px;
-  padding: 6px 12px;
+  padding: 8px 14px;
   font-family: var(--mono);
   font-size: 12px;
   cursor: pointer;
-  min-height: 32px;
+  min-height: 36px;
 }
 #install-banner button[data-action="install"] {
-  color: var(--teal);
-  border-color: rgba(94, 234, 212, 0.4);
-  background: rgba(94, 234, 212, 0.1);
+  color: var(--bg);
+  background: var(--teal);
+  border-color: var(--teal);
+  font-weight: 600;
 }
-#install-banner button:hover { color: var(--text); }
+#install-banner button[data-action="install"]:hover { filter: brightness(1.05); }
+#install-banner button[data-action="dismiss"]:hover { color: var(--text); }
 
 /* iOS-safe insets on the chrome. */
 .topbar {
@@ -1678,6 +1777,18 @@ body::before {
   .brand-name,
   .brand-version { display: none; }
 
+  /* Show the close-drawer button on mobile. */
+  .sidebar-close { display: inline-block; }
+
+  /* The hamburger nudges the search/sort row a bit on narrow screens */
+  .sidebar-tools {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .sidebar-sort { max-width: none; width: 100%; }
+  .sidebar-search-input { font-size: 16px; padding: 8px 28px 8px 10px; }
+
   /* Composer extras row: pills + attach button + send/cancel never overflow */
   .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) 10px; }
 
@@ -1711,19 +1822,27 @@ body::before {
   }
   .info-k { margin-top: 8px; }
 
-  /* install banner moves to bottom on mobile */
+  /* Install banner on mobile: stays at the TOP (sliding down from
+     the safe-area inset), full-width with small side margins, clearly
+     reads as an alert, not blended with the topbar. */
   #install-banner {
-    top: auto;
-    bottom: calc(10px + env(safe-area-inset-bottom));
+    top: calc(8px + env(safe-area-inset-top));
+    bottom: auto;
     left: 12px;
     right: 12px;
     transform: none;
     flex-wrap: wrap;
     justify-content: flex-end;
+    font-size: 14px;
   }
   #install-banner [data-role="label"] {
     flex: 1 1 100%;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
+    font-size: 14px;
+  }
+  @keyframes install-banner-in {
+    from { opacity: 0; transform: translateY(-12px); }
+    to   { opacity: 1; transform: translateY(0);     }
   }
 }
 

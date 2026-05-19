@@ -19,6 +19,23 @@ const STATUS_LABEL = {
   exited:       'disconnected',
 };
 
+// Persisted sort + search prefs (per browser).
+const SORT_KEY   = 'grok-remote.sidebar.sort';
+const SEARCH_KEY = 'grok-remote.sidebar.search';
+const SORT_DEFAULT = 'created_desc';
+
+const SORTS = {
+  created_desc:    { label: 'newest first',     cmp: (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') },
+  created_asc:     { label: 'oldest first',     cmp: (a, b) => (a.createdAt || '').localeCompare(b.createdAt || '') },
+  activity_desc:   { label: 'last active',      cmp: (a, b) => (b.lastSeen   || '').localeCompare(a.lastSeen   || '') },
+  name_asc:        { label: 'name (a -> z)',    cmp: (a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }) },
+};
+
+function loadSort()   { try { const v = localStorage.getItem(SORT_KEY); return SORTS[v] ? v : SORT_DEFAULT; } catch { return SORT_DEFAULT; } }
+function saveSort(v)  { try { localStorage.setItem(SORT_KEY, v); } catch {} }
+function loadSearch() { try { return localStorage.getItem(SEARCH_KEY) || ''; } catch { return ''; } }
+function saveSearch(v){ try { localStorage.setItem(SEARCH_KEY, v); } catch {} }
+
 export class AgentsSidebar {
   constructor({ onSelect, onCreate, onDelete }) {
     this.onSelect = onSelect;
@@ -28,12 +45,15 @@ export class AgentsSidebar {
     this.selectedId = null;
     this.pollHandle = null;
     this.showArchived = false;
+    this.sortKey = loadSort();
+    this.search  = loadSearch();
 
     this.activeList   = el('div', { class: 'agents-list' });
     this.archivedList = el('div', { class: 'agents-list agents-list--archived' });
     this.archivedList.hidden = true;
 
     this.empty = el('div', { class: 'agents-empty' }, 'no agents yet');
+    this.noMatch = el('div', { class: 'agents-empty' }, 'no conversations match your search');
     this.error = el('div', { class: 'agents-empty agents-empty--err' });
     this.error.hidden = true;
 
@@ -43,22 +63,102 @@ export class AgentsSidebar {
       onclick: () => this.spawnNew(),
     }, '+ new');
 
+    // Close-drawer button. Hidden on desktop via CSS, shown on mobile.
+    // Dispatches the same event main.js listens to, so behavior matches
+    // backdrop-tap and Escape.
+    this.closeDrawerBtn = el('button', {
+      class: 'sidebar-close',
+      type: 'button',
+      title: 'close menu',
+      'aria-label': 'close menu',
+      onclick: () => document.dispatchEvent(new CustomEvent('grok-remote:close-drawer')),
+    }, '×');
+
     this.archivedToggle = el('button', {
       class: 'agents-archived-toggle',
       type: 'button',
       onclick: () => this.toggleArchivedView(),
     }, 'archived (0)');
 
+    // Search input + clear button.
+    this.searchInput = el('input', {
+      class: 'sidebar-search-input',
+      type: 'search',
+      placeholder: 'search conversations',
+      value: this.search,
+      'aria-label': 'search conversations',
+      oninput: (ev) => {
+        this.search = (ev.target.value || '').trim();
+        saveSearch(this.search);
+        this.renderList();
+      },
+    });
+    this.searchClearBtn = el('button', {
+      class: 'sidebar-search-clear',
+      type: 'button',
+      title: 'clear search',
+      'aria-label': 'clear search',
+      onclick: () => {
+        this.search = '';
+        this.searchInput.value = '';
+        saveSearch('');
+        this.renderList();
+        this.searchInput.focus();
+      },
+    }, '×');
+
+    // Sort dropdown.
+    this.sortSelect = el('select', {
+      class: 'sidebar-sort',
+      'aria-label': 'sort conversations',
+      onchange: (ev) => {
+        this.sortKey = ev.target.value;
+        saveSort(this.sortKey);
+        this.renderList();
+      },
+    },
+      ...Object.entries(SORTS).map(([k, s]) =>
+        el('option', { value: k, ...(k === this.sortKey ? { selected: '' } : {}) }, s.label)
+      )
+    );
+
     this.root = el('aside', { class: 'sidebar' },
       el('div', { class: 'sidebar-head' },
         el('span', { class: 'sidebar-title' }, 'agents'),
         this.newBtn,
+        this.closeDrawerBtn,
+      ),
+      el('div', { class: 'sidebar-tools' },
+        el('div', { class: 'sidebar-search' },
+          this.searchInput,
+          this.searchClearBtn,
+        ),
+        this.sortSelect,
       ),
       this.error,
       this.activeList,
       this.archivedToggle,
       this.archivedList,
     );
+  }
+
+  // Returns the comparator for the current sort. Starred items always
+  // float to the top within each sort.
+  _sortAgents(list) {
+    const sorter = SORTS[this.sortKey] || SORTS[SORT_DEFAULT];
+    return list.slice().sort((a, b) => {
+      const s = (b.starred ? 1 : 0) - (a.starred ? 1 : 0);
+      if (s) return s;
+      return sorter.cmp(a, b);
+    });
+  }
+
+  _matchesSearch(a) {
+    if (!this.search) return true;
+    const needle = this.search.toLowerCase();
+    return (a.name || '').toLowerCase().includes(needle)
+        || (a.id || '').toLowerCase().includes(needle)
+        || (a.model || '').toLowerCase().includes(needle);
   }
 
   toggleArchivedView() {
@@ -120,8 +220,10 @@ export class AgentsSidebar {
     }
   }
 
-  renderArchivedToggle() {
-    const n = this.agents.filter(a => a.archived).length;
+  renderArchivedToggle(count) {
+    const n = (typeof count === 'number')
+      ? count
+      : this.agents.filter(a => a.archived).length;
     const label = n === 0 ? 'archived (0)' : `${this.showArchived ? '▼' : '▶'} archived (${n})`;
     this.archivedToggle.textContent = label;
     this.archivedToggle.disabled = n === 0;
@@ -130,6 +232,8 @@ export class AgentsSidebar {
   renderList(errorMessage) {
     this.activeList.replaceChildren();
     this.archivedList.replaceChildren();
+    // Reflect search state on the clear button.
+    if (this.searchClearBtn) this.searchClearBtn.hidden = !this.search;
 
     if (errorMessage) {
       this.activeList.appendChild(el('div', { class: 'agents-empty agents-empty--err' },
@@ -138,30 +242,21 @@ export class AgentsSidebar {
       return;
     }
 
-    const active   = this.agents.filter(a => !a.archived);
-    const archived = this.agents.filter(a =>  a.archived);
-    // Starred-first sort within active.
-    active.sort((x, y) => {
-      const s = (y.starred ? 1 : 0) - (x.starred ? 1 : 0);
-      if (s) return s;
-      const tx = x.lastSeen || x.createdAt || '';
-      const ty = y.lastSeen || y.createdAt || '';
-      return ty.localeCompare(tx); // most recent first
-    });
-    archived.sort((x, y) => {
-      const tx = x.archivedAt || x.lastSeen || '';
-      const ty = y.archivedAt || y.lastSeen || '';
-      return ty.localeCompare(tx);
-    });
+    const allActive   = this.agents.filter(a => !a.archived);
+    const allArchived = this.agents.filter(a =>  a.archived);
+    const active   = this._sortAgents(allActive).filter(a => this._matchesSearch(a));
+    const archived = this._sortAgents(allArchived).filter(a => this._matchesSearch(a));
 
-    if (!active.length) {
+    if (!allActive.length) {
       this.activeList.appendChild(this.empty);
+    } else if (!active.length) {
+      this.activeList.appendChild(this.noMatch);
     } else {
       for (const a of active) this.activeList.appendChild(this.renderItem(a, false));
     }
     for (const a of archived) this.archivedList.appendChild(this.renderItem(a, true));
 
-    this.renderArchivedToggle();
+    this.renderArchivedToggle(allArchived.length);
   }
 
   renderItem(a, isArchived) {

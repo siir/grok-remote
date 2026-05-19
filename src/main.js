@@ -371,6 +371,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       closeDrawer();
     }
   });
+  // Sidebar's internal close button (× at the top of the drawer on mobile)
+  // dispatches this event so it works regardless of when the sidebar is
+  // mounted / re-rendered.
+  document.addEventListener('grok-remote:close-drawer', () => closeDrawer());
 
   // wire PWA install banner + service worker.
   registerPwa();
