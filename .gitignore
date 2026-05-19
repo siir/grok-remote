@@ -11,3 +11,7 @@ yarn-error.log*
 *.tsbuildinfo
 .cache/
 .tmp/
+
+# personal drafts (tweets, scratch notes)
+tweet.md
+scratch.md
