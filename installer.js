@@ -532,6 +532,64 @@ async function finale() {
 }
 function stripAnsi(s) { return s.replace(/\x1b\[[0-9;]*m/g, ''); }
 
+// Decide whether to auto-open the dashboard in a browser. Skip when:
+//   - --no-open / -n flag is passed
+//   - NO_OPEN=1 / GR_NO_OPEN=1 env var is set
+//   - CI=1
+//   - running over SSH (SSH_CONNECTION set) - no display on the remote box
+function shouldAutoOpen() {
+  const args = process.argv.slice(2);
+  if (args.includes('--no-open') || args.includes('-n')) return false;
+  if (process.env.NO_OPEN === '1' || process.env.GR_NO_OPEN === '1') return false;
+  if (process.env.CI === '1' || process.env.CI === 'true') return false;
+  if (process.env.SSH_CONNECTION || process.env.SSH_CLIENT) return false;
+  return true;
+}
+
+// Open the URL in Chrome if available; fall back to the OS default browser.
+// Returns { ok, detail }.
+async function openInBrowser(url) {
+  if (process.platform === 'darwin') {
+    // Try Chrome via `open -a`. On failure (Chrome not installed) fall back
+    // to the OS default browser.
+    const chrome = await runCmd('open', ['-a', 'Google Chrome', url]);
+    if (chrome.ok) return { ok: true, detail: 'opened in Chrome' };
+    const def = await runCmd('open', [url]);
+    return def.ok
+      ? { ok: true, detail: 'opened in default browser' }
+      : { ok: false, detail: 'failed to open browser' };
+  }
+  if (process.platform === 'linux') {
+    if (which('google-chrome')) {
+      const r = spawn('google-chrome', [url], { detached: true, stdio: 'ignore' });
+      r.unref?.();
+      return { ok: true, detail: 'opened in Chrome' };
+    }
+    if (which('chromium-browser')) {
+      const r = spawn('chromium-browser', [url], { detached: true, stdio: 'ignore' });
+      r.unref?.();
+      return { ok: true, detail: 'opened in Chromium' };
+    }
+    if (which('xdg-open')) {
+      const r = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+      r.unref?.();
+      return { ok: true, detail: 'opened in default browser' };
+    }
+    return { ok: false, detail: 'no opener found (install xdg-utils)' };
+  }
+  return { ok: false, detail: `unsupported platform: ${process.platform}` };
+}
+
+async function stepOpenBrowser() {
+  return step('open dashboard in Chrome', async () => {
+    if (!shouldAutoOpen()) return { status: 'skip', detail: 'disabled via flag/env' };
+    const url = ctx.tailnetURL || `http://localhost:${ctx.appPort || 7910}`;
+    // Give the server a beat to accept connections.
+    await sleep(800);
+    return openInBrowser(url);
+  });
+}
+
 // ─── main ────────────────────────────────────────────────────────────────
 async function main() {
   ctx.appPort = parseInt(process.env.PORT || '7910', 10);
@@ -550,6 +608,7 @@ async function main() {
     await stepStartPM2();
     await stepSavePM2();
     await stepInstallGrCommand();
+    await stepOpenBrowser();
     await finale();
   } catch (e) {
     showCursor();
