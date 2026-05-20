@@ -1578,6 +1578,23 @@ export class ChatView {
     }
   }
 
+  onUserMessage(data) {
+    const text = (data && typeof data.text === 'string') ? data.text : extractText(data);
+    if (!text) return;
+    // Dedup: the live send() path calls startTurn(text) BEFORE the server
+    // echoes user_message back over SSE. If the active turn already has the
+    // same userText and no assistant/tools yet, the bubble is already there.
+    if (
+      this.activeTurn &&
+      this.activeTurn.userText === text &&
+      !this.activeTurn.assistant &&
+      (!this.activeTurn.tools || !this.activeTurn.tools.length)
+    ) {
+      return;
+    }
+    this.startTurn(text, { ts: this._lastEventTs || Date.now() });
+  }
+
   onMessageChunk(data) {
     const text = extractText(data);
     if (text == null) return;
