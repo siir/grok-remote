@@ -433,6 +433,29 @@ body::before {
   cursor: pointer;
 }
 .sidebar-close:hover { color: var(--text); border-color: var(--border-2); }
+
+/* Sidebar header collapse button (desktop only). Hidden on mobile where
+   the drawer model + hamburger handle the same job. */
+.sidebar-collapse-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.sidebar-collapse-btn:hover {
+  color: var(--teal);
+  border-color: var(--teal);
+  background: rgba(94, 234, 212, 0.08);
+}
+@media (max-width: 720px) {
+  .sidebar-collapse-btn { display: none; }
+}
 /* Highlight the "+ new" button when the sidebar has no agents yet, so a
    first-time user has a clear next step. */
 .sidebar:has(.agents-empty) .agents-new-btn,
