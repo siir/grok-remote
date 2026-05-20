@@ -66,6 +66,7 @@ function renderTrace(d) {
   root.appendChild(renderSummaryCard(d));
   root.appendChild(renderTimeline(d));
   root.appendChild(renderMethodDistribution(d));
+  root.appendChild(renderToolLatency(d));
   root.appendChild(renderTokenChart(d));
   root.appendChild(renderChatHistory(d));
   root.appendChild(renderSystemPrompt(d));
@@ -246,6 +247,87 @@ function renderMethodDistribution(d) {
           el('span', { class: 'trace-bar-count' }, String(n)),
         )
       ),
+    ),
+  );
+}
+
+// ── tool call latency ───────────────────────────────────────────────────
+
+function renderToolLatency(d) {
+  // Pair each tool_call (params.update.sessionUpdate === 'tool_call') with
+  // its completing tool_call_update (status === 'completed'). Latency is the
+  // delta between the two timestamps. Group by tool kind/title.
+  const rows = Array.isArray(d.updates) ? d.updates : [];
+  const starts = new Map(); // toolCallId -> { t, kind, title }
+  const samples = []; // { kind, title, ms }
+  for (const r of rows) {
+    const u = r && r.params && r.params.update;
+    if (!u || typeof u !== 'object') continue;
+    const sub = u.sessionUpdate || u.kind;
+    const id = u.toolCallId || u.id;
+    if (!id) continue;
+    const t = parseTs(r.timestamp);
+    if (!Number.isFinite(t)) continue;
+    if (sub === 'tool_call' || sub === 'tool_call_start') {
+      starts.set(id, { t, kind: u.kind || u.toolKind || 'tool', title: u.title || u.label || u.toolName || 'tool' });
+    } else if ((sub === 'tool_call_update' || sub === 'tool_call_end') && (u.status === 'completed' || u.status === 'failed' || u.status === 'canceled')) {
+      const s = starts.get(id);
+      if (!s) continue;
+      samples.push({ kind: s.kind, title: s.title, ms: Math.max(0, t - s.t), status: u.status });
+      starts.delete(id);
+    }
+  }
+  if (!samples.length) {
+    return el('section', { class: 'trace-section' },
+      el('h3', { class: 'trace-section-title' }, 'tool call latency'),
+      el('div', { class: 'trace-section-empty' }, 'no completed tool calls in this trace.'),
+    );
+  }
+  // Group by title; compute p50/p95/sum.
+  const groups = new Map();
+  for (const s of samples) {
+    let g = groups.get(s.title);
+    if (!g) { g = { title: s.title, kind: s.kind, ms: [], failed: 0 }; groups.set(s.title, g); }
+    g.ms.push(s.ms);
+    if (s.status === 'failed' || s.status === 'canceled') g.failed++;
+  }
+  const list = [];
+  for (const g of groups.values()) {
+    g.ms.sort((a, b) => a - b);
+    const n = g.ms.length;
+    const sum = g.ms.reduce((a, b) => a + b, 0);
+    const p50 = g.ms[Math.floor(n * 0.50)];
+    const p95 = g.ms[Math.min(n - 1, Math.floor(n * 0.95))];
+    list.push({ title: g.title, kind: g.kind, n, sum, p50, p95, failed: g.failed, max: g.ms[n - 1] });
+  }
+  list.sort((a, b) => b.sum - a.sum);
+  const maxSum = list[0].sum;
+
+  const fmtMs = (ms) => ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+  return el('section', { class: 'trace-section' },
+    el('h3', { class: 'trace-section-title' }, `tool call latency (${samples.length} calls)`),
+    el('div', { class: 'trace-tool-table' },
+      el('div', { class: 'trace-tool-row trace-tool-row--head' },
+        el('span', { class: 'trace-tool-c trace-tool-c--name' }, 'tool'),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, 'n'),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, 'p50'),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, 'p95'),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, 'max'),
+        el('span', { class: 'trace-tool-c trace-tool-c--bar' }, 'total time'),
+      ),
+      ...list.map(g => el('div', { class: 'trace-tool-row' },
+        el('span', { class: 'trace-tool-c trace-tool-c--name', title: g.title }, g.title),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, String(g.n) + (g.failed ? ` (${g.failed}✗)` : '')),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, fmtMs(g.p50)),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, fmtMs(g.p95)),
+        el('span', { class: 'trace-tool-c trace-tool-c--num' }, fmtMs(g.max)),
+        el('span', { class: 'trace-tool-c trace-tool-c--bar' },
+          el('span', { class: 'trace-tool-bar-track' },
+            el('span', { class: 'trace-tool-bar-fill', style: { width: `${(g.sum / maxSum) * 100}%` } }),
+          ),
+          el('span', { class: 'trace-tool-bar-num' }, fmtMs(g.sum)),
+        ),
+      )),
     ),
   );
 }

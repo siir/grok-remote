@@ -91,7 +91,7 @@ export const ICONS = {
     <path d="M10 2.5v2.3M10 15.2v2.3M2.5 10h2.3M15.2 10h2.3M4.6 4.6l1.6 1.6M13.8 13.8l1.6 1.6M4.6 15.4l1.6-1.6M13.8 6.2l1.6-1.6"/>
   `),
 
-  // skills (placeholder for upcoming Skills page): lightning bolt
+  // skills: lightning bolt
   skills: wrap(`
     <path d="M11.5 2L4 11.5h5L8.5 18 16 8.5h-5z"/>
   `),

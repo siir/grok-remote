@@ -1743,6 +1743,53 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
+/* Tool latency table */
+.trace-tool-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.trace-tool-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 50px 56px 56px 56px minmax(120px, 1.4fr);
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.trace-tool-row:nth-child(odd) { background: rgba(255, 255, 255, 0.02); }
+.trace-tool-row--head {
+  background: transparent;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.trace-tool-c { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace-tool-c--name { color: var(--text); }
+.trace-tool-c--num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trace-tool-c--bar { display: flex; align-items: center; gap: 8px; }
+.trace-tool-bar-track {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+.trace-tool-bar-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--teal), var(--blue));
+}
+.trace-tool-bar-num { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 50px; text-align: right; }
+
+@media (max-width: 720px) {
+  .trace-tool-row { grid-template-columns: minmax(120px, 1fr) 40px 50px 50px 50px; row-gap: 4px; }
+  .trace-tool-c--bar { grid-column: 1 / -1; }
+}
+
 /* Token usage chart */
 .trace-tokens { display: flex; flex-direction: column; gap: 4px; }
 .trace-token-row {
@@ -2898,15 +2945,6 @@ body::before {
   font-size: 12px;
   color: var(--muted);
 }
-.system-page-stub-note {
-  font-size: 12px;
-  color: var(--dim);
-  border: 1px dashed var(--border-2);
-  border-radius: 8px;
-  padding: 16px;
-  margin: 0;
-}
-
 @media (max-width: 720px) {
   .dashboard--with-rail { grid-template-columns: 1fr; }
   .left-rail {
