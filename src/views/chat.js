@@ -30,6 +30,7 @@ import {
   renderToast,
 } from '../lib/render.js';
 import { copyToClipboard, serializeConversation, serializeResumeCommand } from '../lib/copy.js';
+import { iconHtml } from '../lib/icons.js';
 
 export class ChatView {
   constructor() {
@@ -39,6 +40,12 @@ export class ChatView {
     this.activeTurn = null;
     this.availableCommands = [];
     this.tabsState = 'conversation';
+
+    // Lazy cache of known skill names (set of strings). Populated on first
+    // user message that starts with `/`. Drives the "invoked skill" banner
+    // we drop above turns that hit a /name match.
+    this._knownSkills = null;
+    this._skillsPromise = null;
 
     this.streamEl  = el('div', { class: 'chat-stream' });
     this.composerEl = this.buildComposer();
@@ -468,6 +475,53 @@ export class ChatView {
     return !!this._promptCapImage;
   }
 
+  // Lazy-load the set of known skill names. We use it to decorate user
+  // messages that start with `/<name>` matching a real skill. Cached for
+  // the lifetime of this ChatView instance.
+  async _loadSkills() {
+    if (this._knownSkills) return this._knownSkills;
+    if (this._skillsPromise) return this._skillsPromise;
+    this._skillsPromise = (async () => {
+      try {
+        const data = await api.skills.list();
+        const set = new Set();
+        for (const s of ((data && data.skills) || [])) {
+          if (s && typeof s.name === 'string' && s.name) set.add(s.name);
+        }
+        this._knownSkills = set;
+        return set;
+      } catch {
+        this._knownSkills = new Set();
+        return this._knownSkills;
+      }
+    })();
+    return this._skillsPromise;
+  }
+
+  // Attach an "invoked skill" banner to the turn root when the user
+  // message starts with /name and `name` matches a known skill. Banner
+  // links to #/skills so the user can jump straight to the skill page.
+  _decorateSkill(turn) {
+    if (!turn || !turn.userText) return;
+    const m = turn.userText.match(/^\s*\/([A-Za-z][\w-]*)\b/);
+    if (!m) return;
+    const name = m[1];
+    Promise.resolve(this._knownSkills || this._loadSkills()).then((set) => {
+      if (!set || !set.has(name)) return;
+      if (turn._skillBanner) return;
+      const banner = el('div', { class: 'skill-banner', title: 'invoked skill (click to open the Skills page)' });
+      banner.innerHTML = `
+        <span class="skill-banner-ico">${iconHtml('skills')}</span>
+        <span class="skill-banner-label">invoked skill</span>
+        <a class="skill-banner-name" href="#/skills">/${name}</a>
+      `;
+      turn._skillBanner = banner;
+      // Banner sits ABOVE the user bubble so the chronology reads:
+      //   skill chip → user message → assistant turn
+      turn.root.insertBefore(banner, turn.user);
+    });
+  }
+
   _captureAgentCaps(agent) {
     // Images are now always allowed: the backend saves attachments to the
     // agent's uploads/ folder, so any model can use them via its own tools.
@@ -503,6 +557,9 @@ export class ChatView {
     this.streamEl.replaceChildren();
     this.turns = [];
     this.activeTurn = null;
+    // Fire-and-forget skill cache warmup so the banner can paint as soon
+    // as a /name message lands. Harmless if the agent has none.
+    this._loadSkills();
     this.statusEl.textContent = '';
     this.palette.classList.add('hidden');
     this.palette.replaceChildren();
@@ -836,6 +893,8 @@ export class ChatView {
     };
     this.turns.push(turn);
     this.activeTurn = turn;
+    // Decorate retroactively once the skill set is loaded. Idempotent.
+    this._decorateSkill(turn);
     this.scrollToBottom();
     return turn;
   }

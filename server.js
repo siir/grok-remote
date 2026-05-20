@@ -159,8 +159,22 @@ async function handleApi(req, res, url, method) {
 
   if (url === '/api/agents' && method === 'POST') {
     try {
-      const body = await readJsonBody(req);
-      const rec = await manager.spawn(body || {});
+      const body = await readJsonBody(req) || {};
+      const defaults = loadSettings();
+      // Apply global defaults only when the caller didn't specify them.
+      const settings = { ...(body.settings || {}) };
+      if (!body.model && !settings.model && defaults.defaultModel) {
+        settings.model = defaults.defaultModel;
+      }
+      if (typeof settings.alwaysApprove !== 'boolean' && typeof defaults.autoApprove === 'boolean') {
+        settings.alwaysApprove = defaults.autoApprove;
+      }
+      const merged = {
+        ...body,
+        settings,
+        ...(!body.cwd && defaults.defaultCwd ? { cwd: defaults.defaultCwd } : {}),
+      };
+      const rec = await manager.spawn(merged);
       return sendJson(res, 201, rec);
     } catch (err) {
       return sendJson(res, 400, { ok: false, error: err.message });

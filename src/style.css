@@ -4596,3 +4596,39 @@ body::before {
 @media (max-width: 720px) {
   .skills-grid { grid-template-columns: 1fr; }
 }
+
+/* ----- skill banner (per-turn) ----- */
+.skill-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px 4px;
+  padding: 4px 10px 4px 8px;
+  background: rgba(94, 234, 212, 0.08);
+  border: 1px solid rgba(94, 234, 212, 0.35);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+  letter-spacing: 0.04em;
+  width: fit-content;
+}
+.skill-banner-ico {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--teal);
+}
+.skill-banner-ico svg { width: 14px; height: 14px; }
+.skill-banner-label {
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.skill-banner-name {
+  color: var(--teal);
+  text-decoration: none;
+  font-weight: 600;
+}
+.skill-banner-name:hover { text-decoration: underline; }

@@ -5,6 +5,12 @@ import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
 import { THEMES, getTheme, setTheme } from '../lib/themes.js';
 
+function clampInt(raw, min, max, fallback) {
+  const n = parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
 export class SettingsView {
   constructor() {
     this.settings = {};
@@ -15,6 +21,7 @@ export class SettingsView {
     this.cwdInput     = el('input', { class: 'inp', type: 'text', placeholder: '/path/to/working/dir' });
     this.autoApprove  = el('input', { type: 'checkbox' });
     this.debugToggle  = el('input', { type: 'checkbox' });
+    this.retentionInput = el('input', { class: 'inp inp--num', type: 'number', min: '0', max: '3650', step: '1', placeholder: '30' });
     this.themePicker = this.buildThemePicker();
 
     this.statusEl = el('div', { class: 'settings-status' });
@@ -52,6 +59,10 @@ export class SettingsView {
         el('label', { class: 'toggle' }, this.debugToggle,
           el('span', { class: 'toggle-text' }, 'show developer affordances')),
         'shows the { payload } button in the composer to inspect the exact JSON sent to the agent.'),
+
+      this.field('history retention (days)',
+        this.retentionInput,
+        'preferred lifetime for agent history under ~/.grok-remote/agents/. saved as a preference; periodic cleanup not yet enforced.'),
 
       this.field('theme',
         this.themePicker,
@@ -98,6 +109,8 @@ export class SettingsView {
         this.cwdInput.value    = this.settings.defaultCwd   || '';
         this.autoApprove.checked = !!this.settings.autoApprove;
         this.debugToggle.checked = !!this.settings.debug;
+        const rd = (this.settings.retentionDays != null) ? Number(this.settings.retentionDays) : 30;
+        this.retentionInput.value = Number.isFinite(rd) ? String(Math.max(0, Math.min(3650, rd))) : '30';
       } else {
         this.setStatus('settings unreachable · using defaults', 'warn');
       }
@@ -148,6 +161,7 @@ export class SettingsView {
       defaultCwd:   this.cwdInput.value.trim() || null,
       autoApprove:  !!this.autoApprove.checked,
       debug:        !!this.debugToggle.checked,
+      retentionDays: clampInt(this.retentionInput.value, 0, 3650, 30),
       // theme is persisted client-side in localStorage by setTheme(); we still
       // forward it so server-side settings can mirror the preference if useful.
       theme:        getTheme(),
