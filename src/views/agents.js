@@ -31,6 +31,14 @@ const SORTS = {
   name_asc:        { label: 'name (a -> z)',    cmp: (a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }) },
 };
 
+function fmtTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1e4) return `${Math.round(n / 1e3)}k`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(n);
+}
+
 function loadSort()   { try { const v = localStorage.getItem(SORT_KEY); return SORTS[v] ? v : SORT_DEFAULT; } catch { return SORT_DEFAULT; } }
 function saveSort(v)  { try { localStorage.setItem(SORT_KEY, v); } catch {} }
 function loadSearch() { try { return localStorage.getItem(SEARCH_KEY) || ''; } catch { return ''; } }
@@ -442,6 +450,10 @@ export class AgentsSidebar {
         el('span', { class: 'agent-model' }, a.model || '·'),
         el('span', { class: 'agent-sep' }, '·'),
         el('span', { class: `agent-status agent-status--${status}` }, STATUS_LABEL[status] || status),
+        (typeof a.totalTokens === 'number' && a.totalTokens > 0) ? el('span', { class: 'agent-sep' }, '·') : null,
+        (typeof a.totalTokens === 'number' && a.totalTokens > 0)
+          ? el('span', { class: 'agent-tokens', title: `${a.totalTokens.toLocaleString()} tokens in context` }, fmtTokens(a.totalTokens))
+          : null,
         toggleBtn ? el('span', { class: 'agent-sep' }, '·') : null,
         toggleBtn,
       ),

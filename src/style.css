@@ -578,6 +578,10 @@ body::before {
 }
 .agent-model { color: var(--blue); }
 .agent-sep { color: var(--dim); }
+.agent-tokens {
+  color: var(--teal);
+  font-variant-numeric: tabular-nums;
+}
 .agent-cwd {
   margin-top: 4px;
   font-size: 11px;
