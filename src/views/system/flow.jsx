@@ -683,19 +683,27 @@ function applyAgentEventToState(cur, name, payload, opts) {
         const newContent = u.content
           ? mergeToolContent(prev.response, extractToolContent(u.content))
           : prev.response;
-        // The spawn_subagent tool itself can report status=Completed the
-        // moment it spawns the child (especially in run_in_background mode),
-        // while the actual child is still doing its work. Treat the sub-agent
-        // as truly completed only when we see a SubagentCompleted rawOutput
-        // (the agent's signal for "the subagent finished and here is its
-        // final output"). For inline runs, Completed + rawOutput arrive
-        // together so this still picks them up. Failed/canceled still flow
-        // through immediately.
+        // Two completion regimes:
+        //  - run_in_background=true: spawn_subagent fires-and-forgets, and the
+        //    tool's own Completed status means "we've handed the work off."
+        //    We treat that as the sub-agent's terminal state (we won't see a
+        //    SubagentCompleted for these).
+        //  - run_in_background=false (inline): spawn_subagent's Completed
+        //    arrives with the SubagentCompleted rawOutput. We must wait for
+        //    that payload before flipping to "completed", otherwise the bare
+        //    Completed-ack would prematurely close the card while the child
+        //    is still running.
         const ro = u.rawOutput || null;
         const isSubagentFinal = ro && ro.type === 'SubagentCompleted';
         const isHardTerminal = (status === 'Failed' || status === 'canceled');
-        const reallyDone = isSubagentFinal || isHardTerminal;
-        const effectiveStatus = (status === 'Completed' && !isSubagentFinal && !prev.endedAt)
+        // Did the user request background mode? Check current rawInput (or
+        // fall back to the prior copy if this update omits it).
+        const effRawInput = (u.rawInput && typeof u.rawInput === 'object') ? u.rawInput : prev.rawInput;
+        const isBg = !!(effRawInput && effRawInput.run_in_background);
+        const reallyDone = isSubagentFinal
+          || isHardTerminal
+          || (status === 'Completed' && isBg);
+        const effectiveStatus = (status === 'Completed' && !isSubagentFinal && !isBg && !prev.endedAt)
           ? 'Running' : status;
         let ms = (next.milestones || []).slice();
         if (reallyDone && !prev.endedAt) {
