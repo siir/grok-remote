@@ -8,6 +8,7 @@
 
 import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
+import { fmtTokens } from '../lib/format.js';
 
 const STATUS_LABEL = {
   idle:         'idle',
@@ -30,14 +31,6 @@ const SORTS = {
   activity_desc:   { label: 'last active',      cmp: (a, b) => (b.lastSeen   || '').localeCompare(a.lastSeen   || '') },
   name_asc:        { label: 'name (a -> z)',    cmp: (a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }) },
 };
-
-function fmtTokens(n) {
-  if (!Number.isFinite(n) || n <= 0) return '';
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
-  if (n >= 1e4) return `${Math.round(n / 1e3)}k`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1).replace(/\.0$/, '')}k`;
-  return String(n);
-}
 
 function loadSort()   { try { const v = localStorage.getItem(SORT_KEY); return SORTS[v] ? v : SORT_DEFAULT; } catch { return SORT_DEFAULT; } }
 function saveSort(v)  { try { localStorage.setItem(SORT_KEY, v); } catch {} }

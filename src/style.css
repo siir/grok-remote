@@ -582,6 +582,18 @@ body::before {
   color: var(--teal);
   font-variant-numeric: tabular-nums;
 }
+.tab-tokens {
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  border: 1px solid rgba(94, 234, 212, 0.35);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tab-tokens[hidden] { display: none; }
 .agent-cwd {
   margin-top: 4px;
   font-size: 11px;

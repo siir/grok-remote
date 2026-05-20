@@ -31,6 +31,7 @@ import {
 } from '../lib/render.js';
 import { copyToClipboard, serializeConversation, serializeResumeCommand } from '../lib/copy.js';
 import { iconHtml } from '../lib/icons.js';
+import { fmtTokens } from '../lib/format.js';
 
 export class ChatView {
   constructor() {
@@ -194,6 +195,7 @@ export class ChatView {
       title: 'Copy entire conversation as plain text',
       onclick: () => this.copyConversation(),
     }, 'copy conversation');
+    this.tokensPill = el('span', { class: 'tab-tokens', hidden: true });
     return el('nav', { class: 'tabs' },
       this.tabBtns.conversation,
       this.tabBtns.files,
@@ -201,11 +203,28 @@ export class ChatView {
       this.tabBtns.trace,
       this.tabBtns.flow,
       el('span', { class: 'tabs-spacer' }),
+      this.tokensPill,
       this.starBtn,
       this.settingsBtn,
       this.connectBtn,
       this.copyConvoBtn,
     );
+  }
+
+  _renderTokensPill() {
+    // Prefer the live value from prompt_complete / streaming updates over the
+    // snapshot we got at setAgent time.
+    const live = (typeof this.latestTotalTokens === 'number') ? this.latestTotalTokens : null;
+    const snap = this.currentAgent && this.currentAgent.totalTokens;
+    const t = (typeof live === 'number' && live > 0) ? live : (typeof snap === 'number' ? snap : 0);
+    if (typeof t === 'number' && t > 0) {
+      this.tokensPill.hidden = false;
+      this.tokensPill.textContent = fmtTokens(t) + ' tok';
+      this.tokensPill.title = `${t.toLocaleString()} tokens in context`;
+    } else {
+      this.tokensPill.hidden = true;
+      this.tokensPill.textContent = '';
+    }
   }
 
   async toggleStar() {
@@ -264,6 +283,7 @@ export class ChatView {
     if (this.tabsState === 'info') this.renderInfo(a);
     // Keep the drawer's "reconnect to apply" notice in sync with status.
     if (this.settingsDrawerOpen) this._updateSettingsNotice(a);
+    this._renderTokensPill();
   }
 
   _syncConnectBtn() {
@@ -591,6 +611,7 @@ export class ChatView {
 
     if (!agent || !agent.id) {
       this.agentId = null;
+      this.currentAgent = null;
       this.streamEl.appendChild(this.empty);
       this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       this.filesPane.replaceChildren();
@@ -599,6 +620,7 @@ export class ChatView {
       if (this.starBtn)     this.starBtn.hidden = true;
       if (this.settingsBtn) this.settingsBtn.hidden = true;
       if (this.connectBtn)  this.connectBtn.hidden = true;
+      if (this.tokensPill)  this.tokensPill.hidden = true;
       this.closeSettingsDrawer();
       return;
     }
@@ -612,6 +634,7 @@ export class ChatView {
     this._setComposerEnabled(true);
     this.composerCancel.disabled = true;
     this._syncConnectBtn();
+    this._renderTokensPill();
     this._syncStarBtn();
 
     if (this.tabsState === 'files') {
@@ -1036,6 +1059,7 @@ export class ChatView {
     const meta = (data && data._meta) || data || {};
     if (meta && (meta.totalTokens != null || meta.total_tokens != null)) {
       this.latestTotalTokens = meta.totalTokens ?? meta.total_tokens;
+      this._renderTokensPill();
     }
     // Capture sessionId/cwd from prompt_complete meta if the agent record is
     // missing it (handshake metadata is sometimes delivered out of band).
