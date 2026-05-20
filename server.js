@@ -169,6 +169,10 @@ async function handleApi(req, res, url, method) {
     return handleAgentsStream(req, res);
   }
 
+  if (url === '/api/bg-terminals' && method === 'GET') {
+    return handleGlobalBgTerminals(req, res);
+  }
+
   if (url === '/api/agents' && method === 'POST') {
     try {
       const body = await readJsonBody(req) || {};
@@ -646,6 +650,37 @@ function handleFilesRaw(req, res, rec, method) {
   const stream = fs.createReadStream(target);
   stream.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
   stream.pipe(res);
+}
+
+function handleGlobalBgTerminals(req, res) {
+  // Aggregate every live terminal across every connected agent, so the
+  // topbar can show "bg: N" persistently and so a global viewer can list
+  // long-running processes (like `npm run dev`) without the user having
+  // to know which conversation owns them.
+  const out = [];
+  let runningTotal = 0;
+  for (const rec of manager.list()) {
+    const a = manager.get(rec.id);
+    const host = a && a.client && a.client.terminalHost;
+    if (!host || !host._terminals) continue;
+    const terminals = [];
+    for (const t of host._terminals.values()) {
+      terminals.push({
+        id: t.id,
+        command: t.command,
+        cwd: t.cwd,
+        exited: !!t.exited,
+        exitStatus: t.exitStatus || null,
+        bytes: t.buffer ? t.buffer.length : 0,
+        truncated: !!t.truncated,
+      });
+      if (!t.exited) runningTotal++;
+    }
+    if (terminals.length) {
+      out.push({ agentId: rec.id, agentName: rec.name || rec.id, terminals });
+    }
+  }
+  return sendJson(res, 200, { ok: true, runningCount: runningTotal, agents: out });
 }
 
 function handleTerminalList(req, res, rec) {

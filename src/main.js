@@ -352,6 +352,12 @@ function mountDashboard() {
     if (document.title !== wantTitle) document.title = wantTitle;
   });
 
+  // ── Global background-process tracker ────────────────────────────────
+  // Polls every 3s for every running terminal across every agent so the
+  // user can see persistent bg work (e.g. `npm run dev`) from any page
+  // and from any device. Survives page reload (server-side state).
+  installBgTracker();
+
   // close drawer when a sidebar agent is picked on narrow screens.
   shell.addEventListener('click', (ev) => {
     if (!document.body.hasAttribute('data-drawer-open')) return;
@@ -483,3 +489,118 @@ document.addEventListener('DOMContentLoaded', async () => {
   // wire PWA install banner + service worker.
   registerPwa();
 });
+
+// ── Background-process tracker (persistent across pages + reloads) ──────
+// Polls /api/system/bg-terminals every 3s while the tab is visible. Shows
+// "bg: N" in the topbar when at least one terminal is running, and opens
+// a global viewer on click. Server-side state survives client reloads.
+function installBgTracker() {
+  const btn   = document.getElementById('topbar-bg');
+  const count = btn ? btn.querySelector('.topbar-bg__count') : null;
+  if (!btn || !count) return;
+
+  let lastSnapshot = null;
+
+  async function tick() {
+    if (document.hidden) return;
+    try {
+      const data = await api.terminals.global();
+      lastSnapshot = data;
+      const n = (data && data.runningCount) || 0;
+      const totalEntries = (data && Array.isArray(data.agents))
+        ? data.agents.reduce((a, g) => a + (g.terminals?.length || 0), 0)
+        : 0;
+      btn.hidden = totalEntries === 0;
+      count.textContent = `bg: ${n}`;
+      btn.classList.toggle('topbar-bg--active', n > 0);
+      btn.classList.toggle('topbar-bg--exited-only', n === 0 && totalEntries > 0);
+    } catch {
+      // server may not implement the route yet; hide.
+      btn.hidden = true;
+    }
+  }
+  btn.addEventListener('click', () => openBgViewer(() => lastSnapshot));
+  tick();
+  setInterval(tick, 3000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+}
+
+function openBgViewer(getSnapshot) {
+  // Reuse fresh data and re-fetch every 1s while the modal is open.
+  const overlay = el('div', { class: 'bgglobal-viewer' });
+  const closeBtn = el('button', {
+    type: 'button', class: 'bgglobal-viewer__close',
+    onclick: () => overlay.remove(),
+  }, '×');
+  const title = el('div', { class: 'bgglobal-viewer__title' }, 'background processes');
+  const body  = el('div', { class: 'bgglobal-viewer__body' });
+  overlay.appendChild(el('div', { class: 'bgglobal-viewer__head' }, title, closeBtn));
+  overlay.appendChild(body);
+  document.body.appendChild(overlay);
+
+  async function render() {
+    if (!overlay.isConnected) return;
+    let data = getSnapshot && getSnapshot();
+    try { data = await api.terminals.global(); } catch { /* keep stale */ }
+    body.replaceChildren();
+    const groups = (data && Array.isArray(data.agents)) ? data.agents : [];
+    if (!groups.length) {
+      body.appendChild(el('div', { class: 'bgglobal-viewer__empty' },
+        'no background processes are running.'));
+      return;
+    }
+    for (const g of groups) {
+      const groupEl = el('div', { class: 'bgglobal-viewer__group' });
+      groupEl.appendChild(el('div', { class: 'bgglobal-viewer__group-head' },
+        el('span', { class: 'bgglobal-viewer__agent-name' }, g.agentName || g.agentId),
+        el('button', {
+          type: 'button',
+          class: 'bgglobal-viewer__open-conv',
+          onclick: () => {
+            overlay.remove();
+            navigate(`#/agents/${encodeURIComponent(g.agentId)}`);
+          },
+        }, 'open conversation'),
+      ));
+      for (const t of (g.terminals || [])) {
+        const exited = !!t.exited;
+        const code = t.exitStatus && (t.exitStatus.exitCode ?? t.exitStatus.signal);
+        const row = el('div', { class: `bgglobal-viewer__term ${exited ? 'bgglobal-viewer__term--exited' : ''}` },
+          el('span', { class: 'bgglobal-viewer__term-status' },
+            el('span', { class: 'bgglobal-viewer__term-dot' }),
+            exited ? `exit ${code ?? '?'}` : 'running'),
+          el('div', { class: 'bgglobal-viewer__term-cmd' }, t.command || ''),
+          el('div', { class: 'bgglobal-viewer__term-cwd' }, t.cwd || ''),
+          el('div', { class: 'bgglobal-viewer__term-actions' },
+            el('button', {
+              type: 'button', class: 'bgglobal-viewer__open-output',
+              onclick: () => {
+                // Hand off to the chat view's bg-term viewer by navigating
+                // there with a query param the chat view can pick up. For
+                // now: navigate to the conversation, the per-conversation
+                // strip will be visible and the user can click the chip.
+                overlay.remove();
+                navigate(`#/agents/${encodeURIComponent(g.agentId)}`);
+              },
+            }, 'view in conversation'),
+            !exited && el('button', {
+              type: 'button', class: 'bgglobal-viewer__kill',
+              onclick: async (ev) => {
+                ev.currentTarget.disabled = true;
+                try { await api.terminals.kill(g.agentId, t.id); } catch { /* ignore */ }
+              },
+            }, 'kill'),
+          ),
+        );
+        groupEl.appendChild(row);
+      }
+      body.appendChild(groupEl);
+    }
+  }
+
+  render();
+  const timer = setInterval(() => {
+    if (!overlay.isConnected) { clearInterval(timer); return; }
+    render();
+  }, 1500);
+}
