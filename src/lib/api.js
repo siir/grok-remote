@@ -33,6 +33,7 @@ export const api = {
   models:   ()                => request('GET',    '/api/models'),
 
   listAgents:   ()            => request('GET',    '/api/agents'),
+  agentsStreamUrl: ()         => '/api/agents/stream',
   getAgent:     (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}`),
   createAgent:  (body)        => request('POST',   '/api/agents', body || {}),
   deleteAgent:  (id)          => request('DELETE', `/api/agents/${encodeURIComponent(id)}`),

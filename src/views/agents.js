@@ -192,14 +192,55 @@ export class AgentsSidebar {
   mount(parent) {
     parent.appendChild(this.root);
     this.refresh();
+    // Prefer SSE push from /api/agents/stream; if it never opens (older server
+    // or transient failure), fall back to the 4s poll. The poll also serves as
+    // the recovery path in case the EventSource closes for too long.
+    this._startSseStream();
     this.startPolling();
+  }
+
+  _startSseStream() {
+    if (this._agentsStream) return;
+    try {
+      const es = new EventSource(api.agentsStreamUrl());
+      this._agentsStream = es;
+      const apply = () => { /* delegate to refresh on any event */ };
+      es.addEventListener('open', () => { this._sseAlive = true; });
+      es.addEventListener('agents_snapshot', (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          if (d && Array.isArray(d.agents)) {
+            this.agents = d.agents;
+            this.renderList();
+            document.dispatchEvent(new CustomEvent('grok-remote:agents-refresh', { detail: d.agents }));
+          }
+        } catch { /* ignore parse errors */ }
+      });
+      const onMutation = () => { this.refresh(); };
+      es.addEventListener('agent_added',   onMutation);
+      es.addEventListener('agent_removed', onMutation);
+      es.addEventListener('agent_updated', onMutation);
+      es.addEventListener('error', () => { this._sseAlive = false; });
+      apply();
+    } catch {
+      this._agentsStream = null;
+    }
+  }
+
+  _stopSseStream() {
+    if (this._agentsStream) {
+      try { this._agentsStream.close(); } catch { /* ignore */ }
+      this._agentsStream = null;
+    }
   }
 
   startPolling() {
     if (this.pollHandle) clearInterval(this.pollHandle);
-    // Skip polling when the tab is hidden; refresh immediately on return.
+    // Skip polling when the tab is hidden OR when the SSE stream is healthy.
+    // If SSE flakes, this is the recovery path.
     this.pollHandle = setInterval(() => {
       if (document.hidden) return;
+      if (this._sseAlive) return;
       this.refresh();
     }, 4000);
     if (!this._onVisibility) {
@@ -219,6 +260,7 @@ export class AgentsSidebar {
       document.removeEventListener('visibilitychange', this._onVisibility);
       this._onVisibility = null;
     }
+    this._stopSseStream();
   }
 
   async refresh() {

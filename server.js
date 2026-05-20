@@ -158,6 +158,10 @@ async function handleApi(req, res, url, method) {
     return sendJson(res, 200, manager.list());
   }
 
+  if (url === '/api/agents/stream' && method === 'GET') {
+    return handleAgentsStream(req, res);
+  }
+
   if (url === '/api/agents' && method === 'POST') {
     try {
       const body = await readJsonBody(req) || {};
@@ -623,6 +627,33 @@ function handleFilesRaw(req, res, rec, method) {
   const stream = fs.createReadStream(target);
   stream.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
   stream.pipe(res);
+}
+
+function handleAgentsStream(req, res) {
+  sseHeaders(res);
+  let counter = 0;
+  // Initial snapshot so the consumer doesn't need a separate GET first.
+  sseWrite(res, {
+    id: `agents-${Date.now()}-${++counter}`,
+    event: 'agents_snapshot',
+    data: { agents: manager.list() },
+  });
+  const onChange = (payload) => {
+    sseWrite(res, {
+      id: `agents-${Date.now()}-${++counter}`,
+      event: payload.event || 'agents_changed',
+      data: payload,
+    });
+  };
+  manager.on('list_changed', onChange);
+  const heartbeat = setInterval(() => ssePing(res), 15000);
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    try { manager.off('list_changed', onChange); } catch { /* ignore */ }
+    if (!res.writableEnded) try { res.end(); } catch { /* ignore */ }
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
 }
 
 function handleStream(req, res, id) {

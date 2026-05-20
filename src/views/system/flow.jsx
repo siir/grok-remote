@@ -279,8 +279,22 @@ function FlowInner({ filterIds = null }) {
 
   useEffect(() => {
     refresh();
+    // SSE push for instant updates. The 5s poll stays as a safety net when
+    // the EventSource fails (older server or temporary network loss).
+    let sseAlive = false;
+    let es;
+    try {
+      es = new EventSource('/api/agents/stream');
+      es.addEventListener('open', () => { sseAlive = true; });
+      es.addEventListener('agents_snapshot', () => { refresh(); });
+      es.addEventListener('agent_added',   () => { refresh(); });
+      es.addEventListener('agent_removed', () => { refresh(); });
+      es.addEventListener('agent_updated', () => { refresh(); });
+      es.addEventListener('error', () => { sseAlive = false; });
+    } catch { /* fall through to polling */ }
     pollTimerRef.current = setInterval(() => {
       if (document.hidden) return;
+      if (sseAlive) return;
       refresh();
     }, LIST_POLL_MS);
     const onVis = () => { if (!document.hidden) refresh(); };
@@ -289,6 +303,7 @@ function FlowInner({ filterIds = null }) {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
       document.removeEventListener('visibilitychange', onVis);
+      if (es) { try { es.close(); } catch { /* ignore */ } }
     };
   }, [refresh]);
 
