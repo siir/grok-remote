@@ -5273,6 +5273,49 @@ body::before {
   word-break: break-all;
 }
 
+/* Source-attribution row on each health item. Shows where this entry
+   came from (config file, plugin dir, or scope dir) so users can find
+   and edit it. */
+.health-item-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-size: 10.5px;
+}
+.health-item-source-label {
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9.5px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.health-item-source .health-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-all;
+  color: var(--muted);
+}
+.health-copy-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.health-copy-btn:hover {
+  color: var(--teal);
+  border-color: var(--teal);
+}
+
 .health-path {
   font-family: var(--mono);
   font-size: 11.5px;

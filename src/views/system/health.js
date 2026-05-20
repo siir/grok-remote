@@ -374,7 +374,10 @@ function buildHooks(hooks) {
             h.source?.type ? `source: ${h.source.type}` : null,
             h.source?.plugin_name ? `plugin: ${h.source.plugin_name}` : null,
           ].filter(Boolean),
-          path: h.target || h.source?.path || '',
+          sourceLabel: h.source?.plugin_name
+            ? `from plugin: ${h.source.plugin_name}`
+            : (h.source?.type ? `defined in: ${h.source.type}` : 'defined in:'),
+          sourcePath: h.source?.path || h.target || '',
           fullRecord: h,
         }));
       }
@@ -400,7 +403,10 @@ function buildSkills(skills) {
             s.userInvocable ? 'user-invocable' : null,
           ].filter(Boolean),
           description: s.description || '',
-          path: s.source?.path || '',
+          sourceLabel: s.source?.plugin_name
+            ? `from plugin: ${s.source.plugin_name}`
+            : (s.source?.type ? `from ${scopeLabel(s.source.type)}:` : 'from:'),
+          sourcePath: s.source?.path || '',
           fullRecord: s,
         }));
       }
@@ -427,7 +433,10 @@ function buildAgents(agents) {
             Array.isArray(a.tools) ? `tools: ${a.tools.length}` : null,
           ].filter(Boolean),
           description: a.description || a.systemPrompt || '',
-          path: a.source?.path || '',
+          sourceLabel: a.source?.plugin_name
+            ? `from plugin: ${a.source.plugin_name}`
+            : (a.source?.type ? `from ${scopeLabel(a.source.type)}:` : 'from:'),
+          sourcePath: a.source?.path || '',
           fullRecord: a,
         }));
       }
@@ -467,7 +476,8 @@ function buildPlugins(plugins) {
           secondary: p.enabled === false ? 'disabled' : 'enabled',
           secondaryClass: p.enabled === false ? 'health-warn' : 'health-good',
           tags,
-          path: p.path || '',
+          sourceLabel: p.scope ? `installed in ${scopeLabel(p.scope)}:` : 'installed at:',
+          sourcePath: p.path || '',
           fullRecord: p,
         }));
       }
@@ -647,7 +657,7 @@ function buildList(title, items, renderItem) {
   return wrap;
 }
 
-function buildItem({ primary, secondary, secondaryClass, tags, description, path, fullRecord }) {
+function buildItem({ primary, secondary, secondaryClass, tags, description, path, sourceLabel, sourcePath, fullRecord }) {
   const card = document.createElement('div');
   card.className = 'health-item';
 
@@ -698,11 +708,39 @@ function buildItem({ primary, secondary, secondaryClass, tags, description, path
     card.appendChild(p);
   }
 
-  if (path) {
-    const code = document.createElement('code');
-    code.className = 'health-path health-item-path';
-    code.textContent = path;
-    card.appendChild(code);
+  // Source attribution: every config item came from somewhere on disk or
+  // from a plugin. Make it visible so users can find + edit the source.
+  if (sourceLabel || sourcePath || path) {
+    const src = document.createElement('div');
+    src.className = 'health-item-source';
+    if (sourceLabel) {
+      const lbl = document.createElement('span');
+      lbl.className = 'health-item-source-label';
+      lbl.textContent = sourceLabel;
+      src.appendChild(lbl);
+    }
+    const finalPath = sourcePath || path;
+    if (finalPath) {
+      const code = document.createElement('code');
+      code.className = 'health-path health-item-path';
+      code.textContent = finalPath;
+      src.appendChild(code);
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'health-copy-btn';
+      copyBtn.textContent = 'copy';
+      copyBtn.title = 'copy path to clipboard';
+      copyBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(finalPath);
+          copyBtn.textContent = 'copied';
+          setTimeout(() => { copyBtn.textContent = 'copy'; }, 1200);
+        } catch { /* ignore */ }
+      });
+      src.appendChild(copyBtn);
+    }
+    card.appendChild(src);
   }
 
   const body = document.createElement('pre');
