@@ -959,72 +959,103 @@ body::before {
   overflow-y: auto;
 }
 
-/* tool cards */
-.tool-card {
+/* Tool calls as inline pills: compact one-line header, click to expand.
+   The whole thing flows inline with the rest of the turn — no card chrome. */
+.tool-pill {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  display: flex;
+  border-radius: 999px;
+  overflow: hidden;
+  display: inline-flex;
   flex-direction: column;
-  gap: 6px;
+  width: 100%;
+  max-width: 100%;
 }
-.tool-head {
-  display: flex;
+.tool-pill--open {
+  border-radius: 8px;
+}
+.tool-pill__head {
+  display: grid;
+  grid-template-columns: 12px auto 1fr auto auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  padding: 5px 12px;
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
 }
-.tool-title {
-  flex: 1;
-  font-size: 12.5px;
-  color: var(--text);
+.tool-pill__head:hover { background: rgba(255, 255, 255, 0.03); }
+.tool-pill__caret {
+  font-size: 9px;
+  color: var(--dim);
+  width: 12px;
+}
+.tool-pill__kind {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+  font-weight: 600;
+}
+.tool-pill__label {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
+  min-width: 0;
 }
-.tool-status {
+.tool-pill__dur {
   font-size: 10px;
-  letter-spacing: 0.1em;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.tool-pill__status {
+  font-size: 9px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 99px;
+  padding: 1px 8px;
+  border-radius: 999px;
   border: 1px solid currentColor;
 }
 .tool-status--pending   { color: var(--muted); }
 .tool-status--running   { color: var(--amber); animation: dots-blink 1.0s infinite; }
 .tool-status--completed { color: var(--green); }
 .tool-status--failed    { color: var(--red);   }
+.tool-status--canceled  { color: var(--dim);   }
 
-.tool-raw, .tool-output {
+.tool-pill__body {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.tool-raw summary, .tool-output summary {
-  cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.12em;
+.tool-pill__body[hidden] { display: none; }
+.tool-pill-body__title {
+  font-size: 9px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--dim);
-  list-style: none;
+  margin-bottom: 2px;
 }
-.tool-raw summary::-webkit-details-marker,
-.tool-output summary::-webkit-details-marker { display: none; }
-.tool-raw summary::before, .tool-output summary::before {
-  content: "▸ ";
-  color: var(--dim);
-}
-.tool-raw[open] summary::before, .tool-output[open] summary::before { content: "▾ "; }
-.tool-raw-body, .tool-output-body {
-  margin: 6px 0 0;
+.tool-pill-body__pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--muted);
-  font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 280px;
   overflow-y: auto;
+  background: transparent;
 }
 
 /* turn footer chips */
@@ -2354,15 +2385,24 @@ body::before {
   .tab-action        { font-size: 12px; }
   .chat-status       { font-size: 13px; min-height: 36px; }
   .info-k, .info-v   { font-size: 13px; }
-  .tool-head         { font-size: 13px; }
-  .tool-status       { font-size: 12px; }
+  .tool-pill__label  { font-size: 12px; }
+  .tool-pill__status { font-size: 10px; }
   .chip              { font-size: 12px; }
   .files-row-name    { font-size: 14px; }
   .files-row-size    { font-size: 12px; }
   .composer-hint     { font-size: 12px; }
 
-  /* tool cards / info grid stack on narrow */
-  .tool-head { flex-wrap: wrap; }
+  /* tool pills + info grid stack on narrow */
+  .tool-pill__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .tool-pill__label {
+    flex: 1 1 100%;
+    order: 5; /* push the label below the caret/kind/status row */
+  }
   .info-grid {
     grid-template-columns: 1fr;
     gap: 4px 0;

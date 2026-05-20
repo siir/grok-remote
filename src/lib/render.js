@@ -135,7 +135,46 @@ const STATUS_STYLES = {
   Running:   { cls: 'tool-status--running',   label: 'running'   },
   Completed: { cls: 'tool-status--completed', label: 'completed' },
   Failed:    { cls: 'tool-status--failed',    label: 'failed'    },
+  Canceled:  { cls: 'tool-status--canceled',  label: 'canceled'  },
 };
+
+// ACP status values arrive either capitalized (legacy "Pending"/"Running"/...)
+// or lowercase + snake_case ("pending", "in_progress", "completed", "failed",
+// "canceled"). Normalize so the rest of the UI can look up STATUS_STYLES.
+function normalizeStatus(s) {
+  if (!s) return null;
+  const k = String(s).trim().toLowerCase();
+  switch (k) {
+    case 'pending':                  return 'Pending';
+    case 'running':
+    case 'in_progress':
+    case 'inprogress':               return 'Running';
+    case 'completed':
+    case 'success':
+    case 'succeeded':                return 'Completed';
+    case 'failed':
+    case 'error':
+    case 'errored':                  return 'Failed';
+    case 'canceled':
+    case 'cancelled':                return 'Canceled';
+    default:                         return null;
+  }
+}
+
+function readStatus(payload) {
+  if (!payload) return null;
+  const meta = payload._meta && payload._meta.updateParams && payload._meta.updateParams.status;
+  return normalizeStatus(meta) || normalizeStatus(payload.status) || null;
+}
+
+function fmtDur(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
+  const m = Math.floor(ms / 60000);
+  const s = Math.round((ms % 60000) / 1000);
+  return `${m}m${s ? ` ${s}s` : ''}`;
+}
 
 function inferToolTitle(update) {
   const title = update.title;
@@ -148,44 +187,76 @@ function inferToolTitle(update) {
 
 export function renderToolCard(initial) {
   // initial is the `tool_call` update payload.
-  const status = (initial && initial._meta && initial._meta.updateParams && initial._meta.updateParams.status) || 'Pending';
+  const status = readStatus(initial) || 'Pending';
   const styleInfo = STATUS_STYLES[status] || STATUS_STYLES.Pending;
+  const startedAt = Date.now();
+  let endedAt = null;
 
-  const titleEl  = el('span', { class: 'tool-title' }, inferToolTitle(initial || {}));
-  const statusEl = el('span', { class: `tool-status ${styleInfo.cls}` }, styleInfo.label);
+  const kindEl   = el('span', { class: 'tool-pill__kind' }, (initial && initial.kind) || 'tool');
+  const titleEl  = el('span', { class: 'tool-pill__label' }, inferToolTitle(initial || {}));
+  const durEl    = el('span', { class: 'tool-pill__dur' }, '');
+  const statusEl = el('span', { class: `tool-pill__status ${styleInfo.cls}` }, styleInfo.label);
+  const caretEl  = el('span', { class: 'tool-pill__caret' }, '▸');
 
-  const rawInputBody = el('pre', { class: 'tool-raw-body' });
+  const rawInputBody = el('pre', { class: 'tool-pill-body__pre' });
   rawInputBody.textContent = initial && initial.rawInput ? JSON.stringify(initial.rawInput, null, 2) : '{}';
-  const rawInput = el('details', { class: 'tool-raw' },
-    el('summary', null, 'input'),
+  const outputBody = el('pre', { class: 'tool-pill-body__pre' });
+
+  const inputSection = el('div', { class: 'tool-pill-body__section' },
+    el('div', { class: 'tool-pill-body__title' }, 'input'),
     rawInputBody,
   );
-
-  const outputBody = el('pre', { class: 'tool-output-body' });
-  const output = el('details', { class: 'tool-output' },
-    el('summary', null, 'output'),
+  const outputSection = el('div', { class: 'tool-pill-body__section tool-pill-body__section--output' },
+    el('div', { class: 'tool-pill-body__title' }, 'output'),
     outputBody,
   );
+  const body = el('div', { class: 'tool-pill__body', hidden: true }, inputSection, outputSection);
 
-  const head = el('div', { class: 'tool-head' }, titleEl, statusEl);
-  const node = el('div', { class: 'tool-card', dataset: { toolId: (initial && initial.toolCallId) || '' } },
+  const head = el('button', {
+    type: 'button',
+    class: 'tool-pill__head',
+    title: inferToolTitle(initial || {}),
+    onclick: () => {
+      body.hidden = !body.hidden;
+      caretEl.textContent = body.hidden ? '▸' : '▾';
+      node.classList.toggle('tool-pill--open', !body.hidden);
+    },
+  }, caretEl, kindEl, titleEl, durEl, statusEl);
+
+  const node = el('div', { class: 'tool-pill', dataset: { toolId: (initial && initial.toolCallId) || '' } },
     head,
-    rawInput,
-    output,
+    body,
   );
 
   let outputBuf = '';
 
-  function applyUpdate(payload) {
-    const newStatus = (payload._meta && payload._meta.updateParams && payload._meta.updateParams.status) || null;
-    if (newStatus) {
-      const info = STATUS_STYLES[newStatus] || styleInfo;
-      statusEl.className = `tool-status ${info.cls}`;
-      statusEl.textContent = info.label;
+  // Tick the duration label while the call is running so the user sees
+  // elapsed time live (every 500ms is enough; cheap and aligned with the
+  // SSE token throttle).
+  const durTimer = setInterval(() => {
+    if (endedAt) { clearInterval(durTimer); return; }
+    durEl.textContent = fmtDur(Date.now() - startedAt) + '…';
+  }, 500);
+
+  function setStatus(canonical) {
+    const info = STATUS_STYLES[canonical] || styleInfo;
+    statusEl.className = `tool-pill__status ${info.cls}`;
+    statusEl.textContent = info.label;
+    if ((canonical === 'Completed' || canonical === 'Failed' || canonical === 'Canceled') && !endedAt) {
+      endedAt = Date.now();
+      clearInterval(durTimer);
+      durEl.textContent = fmtDur(endedAt - startedAt);
     }
+  }
+
+  function applyUpdate(payload) {
+    const canonical = readStatus(payload);
+    if (canonical) setStatus(canonical);
     if (payload.title || (payload.rawInput && payload.rawInput.command)) {
       titleEl.textContent = inferToolTitle(payload);
+      head.title = inferToolTitle(payload);
     }
+    if (payload.kind) kindEl.textContent = payload.kind;
     if (payload.rawInput) {
       rawInputBody.textContent = JSON.stringify(payload.rawInput, null, 2);
     }
@@ -223,8 +294,6 @@ export function renderToolCard(initial) {
     }
     outputBuf += chunk;
     outputBody.textContent = outputBuf;
-    // auto-open the output pane on first stream
-    if (!output.open) output.open = true;
   }
 
   return { node, applyUpdate, appendDelta, getStatus: () => statusEl.textContent };
