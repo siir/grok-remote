@@ -767,8 +767,29 @@ body::before {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 .pane.hidden { display: none; }
+
+/* "↓ jump to latest" floating button shown when auto-scroll is paused. */
+.jump-to-latest {
+  position: absolute;
+  right: 16px;
+  bottom: 96px;
+  z-index: 5;
+  background: var(--panel-2);
+  color: var(--teal);
+  border: 1px solid var(--teal);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.jump-to-latest:hover { background: var(--panel); }
+.jump-to-latest[hidden] { display: none; }
 .pane-empty {
   color: var(--dim);
   padding: 40px 20px;

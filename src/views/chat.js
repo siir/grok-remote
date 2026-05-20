@@ -94,6 +94,7 @@ export class ChatView {
     this.streamEl.appendChild(this.empty);
     this._setComposerEnabled(false);
     this._attachComposerExtras();
+    this._initAutoScroll();
 
     // visibility change -> refresh history on becoming visible
     this._onVisibility = () => {
@@ -145,6 +146,7 @@ export class ChatView {
       this.flowMounted = false;
     }
     if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
+    if (this._detachAutoScroll) { try { this._detachAutoScroll(); } catch { /* ignore */ } this._detachAutoScroll = null; }
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
     if (this._onAgentsRefresh) {
@@ -899,9 +901,13 @@ export class ChatView {
         if (!name) continue;
         this.handleEvent(name, data, { fromHistory: true });
       }
-      // Scroll the stream to the bottom after a history load.
+      // Scroll the stream to the bottom after a history load. Reset
+      // auto-scroll: the user just opened the conversation, they want to be
+      // at the latest message regardless of where the last session ended.
+      this._autoScroll = true;
+      if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = true;
       requestAnimationFrame(() => {
-        this.streamEl.scrollTop = this.streamEl.scrollHeight;
+        this.scrollToBottom({ force: true });
       });
     } catch (e) {
       // backend may not implement history yet
@@ -994,9 +1000,54 @@ export class ChatView {
     this.scrollToBottom();
   }
 
-  scrollToBottom() {
-    // smooth-scroll the conversation pane
+  scrollToBottom(opts) {
+    // Stay pinned to the bottom only when the user hasn't scrolled away.
+    // Force-scroll on explicit actions (sending a message, initial load).
+    if (!(opts && opts.force) && this._autoScroll === false) return;
     this.streamEl.scrollTop = this.streamEl.scrollHeight;
+  }
+
+  // Auto-scroll state machine: pinned to bottom by default; user scrolling
+  // up disables it; scrolling back within AUTO_SCROLL_THRESHOLD re-enables.
+  _initAutoScroll() {
+    this._autoScroll = true;
+    const THRESHOLD = 60; // px from bottom counts as "at bottom"
+    // Jump-to-latest button, hidden by default. Lives inside the stream so
+    // it shows up above the composer without restructuring the layout.
+    this._jumpToLatestBtn = el('button', {
+      type: 'button',
+      class: 'jump-to-latest',
+      hidden: true,
+      onclick: () => {
+        this._autoScroll = true;
+        this.scrollToBottom({ force: true });
+        this._jumpToLatestBtn.hidden = true;
+      },
+    }, '↓ jump to latest');
+    // Append once the user mounts — defer to mount() so the button lives
+    // inside the conversation pane, not the stream itself.
+    requestAnimationFrame(() => {
+      const pane = this.streamEl.parentElement;
+      if (pane && !pane.contains(this._jumpToLatestBtn)) {
+        pane.appendChild(this._jumpToLatestBtn);
+      }
+    });
+    const onScroll = () => {
+      const el = this.streamEl;
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const atBottom = dist <= THRESHOLD;
+      if (atBottom && !this._autoScroll) {
+        this._autoScroll = true;
+        this._jumpToLatestBtn.hidden = true;
+      } else if (!atBottom && this._autoScroll) {
+        this._autoScroll = false;
+        this._jumpToLatestBtn.hidden = false;
+      }
+    };
+    this.streamEl.addEventListener('scroll', onScroll, { passive: true });
+    this._detachAutoScroll = () => {
+      this.streamEl.removeEventListener('scroll', onScroll);
+    };
   }
 
   // ── event dispatch ──────────────────────────────────────────────────
@@ -1187,7 +1238,12 @@ export class ChatView {
     this.palette.classList.add('hidden');
 
     // Start a turn locally and let the SSE stream fill in the rest.
+    // The user just sent a message — they want to see it land, so re-enable
+    // auto-scroll regardless of where they were in the history.
+    this._autoScroll = true;
+    if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = true;
     this.startTurn(text);
+    this.scrollToBottom({ force: true });
     this.composerCancel.disabled = false;
 
     try {
