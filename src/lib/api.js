@@ -105,8 +105,16 @@ export const api = {
   },
 
   memory: {
-    get:      ()      => request('GET',  '/api/system/memory'),
-    clear:    (scope) => request('POST', '/api/system/memory/clear', { scope }),
+    get:         ()             => request('GET',  '/api/system/memory'),
+    clear:       (scope)        => request('POST', '/api/system/memory/clear', { scope }),
+    read:        (p)            => request('GET',
+      `/api/system/memory/read?path=${encodeURIComponent(p || '')}`),
+    saveContent: (p, content)   => request('PUT',  '/api/system/memory/content',
+      { path: p, content }),
+    createFile:  (scope, name, content) => request('POST', '/api/system/memory/file',
+      { scope, name, ...(typeof content === 'string' ? { content } : {}) }),
+    deleteFile:  (p)            => request('DELETE',
+      `/api/system/memory/file?path=${encodeURIComponent(p || '')}`),
   },
 
   skills: {
