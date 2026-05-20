@@ -30,6 +30,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import dagre from 'dagre';
 
 import { api } from '../../lib/api.js';
 import { fmtTokens } from '../../lib/format.js';
@@ -175,26 +176,13 @@ function extractChildCallsFromTrace(traceData) {
   return [...byId.values()].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
 }
 
-// Sub-agent layout: cards hang off the LEFT side of the main agent, stacked
-// vertically using the same AGENT_GAP-style cadence so future deep nesting
-// is easy to extend.
-const LAYOUT = {
-  AGENT_GAP: 320,    // mirror AGENT_ROW_HEIGHT cadence between siblings
-  SUB_AGENT_X: -260, // 240px wide card + 20px gap from parent's left edge
-  SUB_AGENT_GAP: 12, // vertical gap between adjacent sub-agent cards
-  // Child tool-call nodes hang off the LEFT side of an expanded sub-agent
-  // card. They sit further left than the sub-agent column (offset relative
-  // to the sub-agent's own x).
-  SUB_AGENT_CHILD_X: -220, // delta from sub-agent x: -260 - 220 = -480
-  SUB_AGENT_CHILD_GAP: 8,
-  TOOL_GAP: 12,      // vertical gap between adjacent tool / group cards in the same column
-  BG_GAP: 12,        // vertical gap between adjacent bg-task cards
-  AGENT_CLUSTER_GAP: 80, // gap between one agent cluster and the next
-};
+// (Older hand-rolled layout constants used to live here: column offsets,
+// inter-card gaps, agent row pitch. dagre now derives spacing from each
+// node's width/height + the `nodesep`/`ranksep` config in the layout pass.)
 
 // Per-node-type closed and (worst-case) open pixel heights. These mirror the
 // rendered card geometry in style.css. Open heights are conservative ceilings
-// so the running-tally layout never under-reserves space.
+// so the dagre layout never under-reserves space.
 const NODE_HEIGHTS = {
   agent:      { closed: 135, open: 135 },     // no expand
   tool:       { closed: 42,  open: 280 },     // closed pill, open body with input/output
@@ -202,6 +190,18 @@ const NODE_HEIGHTS = {
   subAgent:   { closed: 138, open: 340 },     // crumb + head + row + snippet; expanded shows prompt/response/stats
   bgTask:     { closed: 78,  open: 78 },      // bg cards never expand right now
   milestone:  { closed: 50,  open: 50 },      // tiny pill
+};
+
+// Per-node-type rendered widths (also mirrored from style.css). Tool and
+// sub-agent cards widen when expanded; everything else is fixed width. dagre
+// needs the rendered width to space sibling ranks correctly.
+const NODE_WIDTHS = {
+  agent:      { closed: 220, open: 220 },
+  tool:       { closed: 180, open: 340 },
+  group:      { closed: 180, open: 180 },
+  subAgent:   { closed: 180, open: 280 },
+  bgTask:     { closed: 220, open: 220 },
+  milestone:  { closed: 200, open: 200 },
 };
 // Per-grouped-tool-child row height when a group is expanded (each child
 // stacks below its parent group node).
@@ -228,6 +228,11 @@ const SUB_CHILD_LIVE_RETRY_MS   = 5000;
 function nodeKind(typeName, isOpen) {
   const h = NODE_HEIGHTS[typeName] || NODE_HEIGHTS.tool;
   return isOpen ? h.open : h.closed;
+}
+
+function nodeWidth(typeName, isOpen) {
+  const w = NODE_WIDTHS[typeName] || NODE_WIDTHS.tool;
+  return isOpen ? w.open : w.closed;
 }
 
 const STATUS_RANK = {
@@ -596,25 +601,18 @@ function formatTokens(n) {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-// Lay agent cards out in a column on the left, leaving the right half of the
-// canvas for tool-call satellites. React Flow handles panning + zoom.
-// AGENT_TOP_OFFSET leaves room above the first row for the milestone strip.
-// Each agent's row height is computed dynamically based on the height of its
-// sub-agents column, tools column, and bg-task column (whichever is tallest),
-// so an expanded GroupNode or ToolNode never overlaps the next agent below.
-const AGENT_ROW_HEIGHT_MIN = 320;
-const AGENT_TOP_OFFSET     = 110; // leave the milestone strip uncluttered
-const BG_NODES_VISIBLE     = 3;
+// Cap how many bg-task cards we draw per agent. Running first, then a few
+// most-recent exited. The dagre layout still fans these out as siblings.
+const BG_NODES_VISIBLE = 3;
 
-// Build the agent base positions. y is assigned at use-time by the caller
-// after each cluster height is known. Returning a stub here keeps the
-// per-agent .data shape intact for the rest of the pipeline.
+// Build a stub list of agent nodes (positions are filled in by the dagre
+// layout pass in FlowInner's useMemo).
 function layoutAgents(agents) {
   return agents.map((a) => ({
     id: `agent:${a.id}`,
     type: 'agent',
-    // y intentionally 0; the FlowInner useMemo pass fills it after computing
-    // cluster heights.
+    // x/y are placeholders; the dagre layout in FlowInner's useMemo
+    // overwrites them with the final node positions.
     position: { x: 0, y: 0 },
     draggable: true,
     data: {
@@ -1058,6 +1056,15 @@ function FlowInner({ filterIds = null }) {
   // button (not yet wired) or reloads the page.
   const [subagentChildren, setSubagentChildren] = useState({});
   const { fitView } = useReactFlow();
+
+  // dagre layout cache. Layout is recomputed only when the structural
+  // signature (node ids + open flags + edge endpoints) changes. The
+  // useMemo below re-runs every second to refresh live durations, but
+  // structural changes are rare; this cache keeps the dagre call from
+  // dominating the render budget on large graphs.
+  //   { sig: string, positions: Map<nodeId, {x,y}>, minY: number,
+  //     agentTopY: Map<agentId, number> }
+  const layoutCacheRef = useRef(null);
 
   // Mutable refs that survive re-renders without re-subscribing effects.
   const streamsRef    = useRef(new Map()); // id -> EventSource
@@ -1592,113 +1599,174 @@ function FlowInner({ filterIds = null }) {
     const auxNodes = [];
     const auxEdges = [];
 
-    // Running y-cursor for the agent column. We compute each agent's y at the
-    // top of the loop, then advance the cursor past the tallest of its three
-    // child columns (sub-agents, tools, bg-tasks). This guarantees the next
-    // agent never overlaps an expanded tool body in the row above.
-    let agentY = AGENT_TOP_OFFSET;
+    // Per-agent buckets of milestone-node ids. Milestones don't go into
+    // dagre (they're a chronological strip at the top), but we need to
+    // position each agent's strip ABOVE that agent's cluster after dagre
+    // tells us where the cluster landed.
+    const milestonesByAgent = new Map(); // agentId -> { stripNodes: [{id, m, j}], strip: [...] }
 
     agentNodes.forEach((agentNode) => {
-      // Anchor the agent at the current cursor position.
-      agentNode.position = { x: 0, y: agentY };
-      const baseY = agentY;
       const st = agentState[agentNode.data.agentId];
+      if (!st) return;
 
-      // Pre-compute each column's running height. Each column maintains a
-      // local cursor (in canvas y), starting at the agent's baseY. We add
-      // node + GAP, never a fixed row pitch, so an expanded body actually
-      // displaces its siblings.
-      let subY  = baseY;
-      let toolY = baseY;
-      let bgY   = baseY + 120; // bg starts below the agent card itself
+      // --- Sub-agents (hang off the LEFT of the parent) ---
+      if (Array.isArray(st.subAgents) && st.subAgents.length) {
+        const subs = st.subAgents
+          .slice()
+          .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+        subs.forEach((sub) => {
+          const subId = `sub:${agentNode.data.agentId}:${sub.id}`;
+          const isOpen = expandedNodes.has(subId);
+          const status = String(sub.status || 'pending').toLowerCase();
+          const running = !sub.endedAt && (status === 'pending' || status === 'running' || status === 'in_progress');
+          // Child-trace state lookup. We don't fetch here (that happens
+          // in toggleNode on open) -- this is only for the data we pass
+          // into the SubAgentNode for its loading badge + the children
+          // we render off to the left when expanded.
+          const childKey = `${agentNode.data.agentId}:${sub.id}`;
+          const childEntry = subagentChildren[childKey];
+          const childSessionId = extractSubagentId(sub);
+          auxNodes.push({
+            id: subId,
+            type: 'subAgent',
+            position: { x: 0, y: 0 },
+            draggable: true,
+            selectable: true,
+            data: {
+              id: sub.id,
+              label: sub.label,
+              kind: sub.kind,
+              status: sub.status,
+              prompt: sub.prompt,
+              response: sub.response,
+              rawOutput: sub.rawOutput || null,
+              startedAt: sub.startedAt,
+              endedAt: sub.endedAt,
+              parentName: agentNode.data.name,
+              depth: 1,
+              isOpen,
+              childStatus: childEntry ? childEntry.status : (childSessionId ? 'idle' : null),
+              childCount: childEntry && Array.isArray(childEntry.calls) ? childEntry.calls.length : 0,
+              childError: childEntry && childEntry.error ? childEntry.error : null,
+              onToggle: () => toggleNode(subId, {
+                kind: 'subAgent',
+                childKey,
+                sessionId: childSessionId,
+                cwd: agentNode.data.cwd || '',
+              }),
+            },
+          });
+          auxEdges.push({
+            id: `edge:${agentNode.id}->${subId}`,
+            source: agentNode.id,
+            sourceHandle: 'sub',
+            target: subId,
+            animated: running,
+            style: {
+              stroke: status === 'failed'
+                ? 'var(--red)'
+                : (running ? 'var(--blue)' : 'var(--dim)'),
+              strokeWidth: 1.4,
+              opacity: running ? 1 : 0.7,
+              strokeDasharray: running ? '0' : '4 3',
+            },
+          });
 
-      if (st) {
-        // --- Sub-agents (hang off the LEFT of the parent) ---
-        if (Array.isArray(st.subAgents) && st.subAgents.length) {
-          const subs = st.subAgents
-            .slice()
-            .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
-          subs.forEach((sub) => {
-            const subId = `sub:${agentNode.data.agentId}:${sub.id}`;
-            const isOpen = expandedNodes.has(subId);
-            const sx = agentNode.position.x + LAYOUT.SUB_AGENT_X;
-            const sy = subY;
-            const status = String(sub.status || 'pending').toLowerCase();
-            const running = !sub.endedAt && (status === 'pending' || status === 'running' || status === 'in_progress');
-            // Child-trace state lookup. We don't fetch here (that happens
-            // in toggleNode on open) -- this is only for the data we pass
-            // into the SubAgentNode for its loading badge + the children
-            // we render off to the left when expanded.
-            const childKey = `${agentNode.data.agentId}:${sub.id}`;
-            const childEntry = subagentChildren[childKey];
-            const childSessionId = extractSubagentId(sub);
+          // --- Child tool calls under an expanded sub-agent ---
+          if (isOpen && childEntry && childEntry.status === 'loaded' && childEntry.calls.length > 0) {
+            childEntry.calls.forEach((call) => {
+              const childId = `subtool:${agentNode.data.agentId}:${sub.id}:${call.id}`;
+              const childOpen = expandedNodes.has(childId);
+              const inactive = !!call.endedAt;
+              auxNodes.push({
+                id: childId,
+                type: 'tool',
+                position: { x: 0, y: 0 },
+                draggable: true,
+                selectable: true,
+                data: {
+                  id: call.id,
+                  kind: call.kind,
+                  label: call.label,
+                  status: call.status,
+                  rawInput: call.rawInput,
+                  rawOutput: call.rawOutput,
+                  content: call.content,
+                  locations: call.locations,
+                  startedAt: call.startedAt,
+                  endedAt: call.endedAt,
+                  isOpen: childOpen,
+                  onToggle: () => toggleNode(childId),
+                  depth: 2,
+                },
+                style: inactive ? { opacity: 0.85 } : { opacity: 1 },
+                className: 'flow-tool-node-wrap flow-tool-node-wrap--subchild',
+              });
+              auxEdges.push({
+                id: `edge:${subId}->${childId}`,
+                source: subId,
+                sourceHandle: 'children',
+                target: childId,
+                animated: !call.endedAt,
+                style: {
+                  stroke: (String(call.status || '').toLowerCase() === 'failed' ? 'var(--red)' : 'var(--blue)'),
+                  strokeWidth: 1.1,
+                  opacity: call.endedAt ? 0.6 : 1,
+                },
+              });
+            });
+          }
+        });
+      }
+
+      // --- Tool calls + grouping ---
+      if (st.calls && Object.keys(st.calls).length) {
+        const sortedCalls = Object.values(st.calls).slice().sort((a, b) => {
+          const at = a.startedAt || 0, bt = b.startedAt || 0;
+          return at - bt;
+        });
+        const items = groupToolCalls(sortedCalls);
+        items.forEach((entry) => {
+          if (entry.type === 'group') {
+            const groupKey = `${entry.kind}@${entry.startedAt}`;
+            const expanded = !!expandedGroups[`${agentNode.data.agentId}:${groupKey}`];
+            const nodeId = `group:${agentNode.data.agentId}:${groupKey}`;
             auxNodes.push({
-              id: subId,
-              type: 'subAgent',
-              position: { x: sx, y: sy },
+              id: nodeId,
+              type: 'group',
+              position: { x: 0, y: 0 },
               draggable: true,
               selectable: true,
               data: {
-                id: sub.id,
-                label: sub.label,
-                kind: sub.kind,
-                status: sub.status,
-                prompt: sub.prompt,
-                response: sub.response,
-                rawOutput: sub.rawOutput || null,
-                startedAt: sub.startedAt,
-                endedAt: sub.endedAt,
-                parentName: agentNode.data.name,
-                depth: 1,
-                isOpen,
-                childStatus: childEntry ? childEntry.status : (childSessionId ? 'idle' : null),
-                childCount: childEntry && Array.isArray(childEntry.calls) ? childEntry.calls.length : 0,
-                childError: childEntry && childEntry.error ? childEntry.error : null,
-                onToggle: () => toggleNode(subId, {
-                  kind: 'subAgent',
-                  childKey,
-                  sessionId: childSessionId,
-                  cwd: agentNode.data.cwd || '',
-                }),
+                kind: entry.kind,
+                count: entry.count,
+                totalMs: entry.totalMs,
+                failedCount: entry.failedCount,
+                expanded,
+                onToggle: () => toggleGroup(agentNode.data.agentId, groupKey),
               },
             });
+            const groupActive = !entry.endedAt;
             auxEdges.push({
-              id: `edge:${agentNode.id}->${subId}`,
+              id: `edge:${agentNode.id}->${nodeId}`,
               source: agentNode.id,
-              sourceHandle: 'sub',
-              target: subId,
-              animated: running,
+              target: nodeId,
+              animated: groupActive,
               style: {
-                stroke: status === 'failed'
-                  ? 'var(--red)'
-                  : (running ? 'var(--blue)' : 'var(--dim)'),
+                stroke: entry.failedCount ? 'var(--red)' : (groupActive ? 'var(--teal)' : 'var(--dim)'),
                 strokeWidth: 1.4,
-                opacity: running ? 1 : 0.7,
-                strokeDasharray: running ? '0' : '4 3',
+                opacity: groupActive ? 1 : 0.7,
               },
             });
-            // The sub-agent card's own height contribution.
-            subY += nodeKind('subAgent', isOpen) + LAYOUT.SUB_AGENT_GAP;
-
-            // --- Child tool calls (rendered LEFT of the sub-agent card) ---
-            // Only when:
-            //   - the sub-agent is expanded
-            //   - we successfully fetched a non-empty trace
-            // We position child nodes vertically aligned with the
-            // sub-agent's top, in their own short column, then advance
-            // subY past whichever column is taller (the sub-agent itself
-            // or its child column).
-            if (isOpen && childEntry && childEntry.status === 'loaded' && childEntry.calls.length > 0) {
-              const childX = sx + LAYOUT.SUB_AGENT_CHILD_X;
-              let childY = sy;
-              childEntry.calls.forEach((call) => {
-                const childId = `subtool:${agentNode.data.agentId}:${sub.id}:${call.id}`;
+            if (expanded) {
+              entry.items.forEach((call) => {
+                const childId = `tool:${agentNode.data.agentId}:${call.id}`;
                 const childOpen = expandedNodes.has(childId);
                 const inactive = !!call.endedAt;
                 auxNodes.push({
                   id: childId,
                   type: 'tool',
-                  position: { x: childX, y: childY },
+                  position: { x: 0, y: 0 },
                   draggable: true,
                   selectable: true,
                   data: {
@@ -1714,257 +1782,239 @@ function FlowInner({ filterIds = null }) {
                     endedAt: call.endedAt,
                     isOpen: childOpen,
                     onToggle: () => toggleNode(childId),
-                    depth: 2,
                   },
-                  style: inactive ? { opacity: 0.85 } : { opacity: 1 },
-                  className: 'flow-tool-node-wrap flow-tool-node-wrap--subchild',
+                  style: { opacity: inactive ? 0.85 : 1 },
+                  className: 'flow-tool-node-wrap flow-tool-node-wrap--grouped',
                 });
                 auxEdges.push({
-                  id: `edge:${subId}->${childId}`,
-                  source: subId,
-                  sourceHandle: 'children',
+                  id: `edge:${nodeId}->${childId}`,
+                  source: nodeId,
                   target: childId,
-                  animated: !call.endedAt,
+                  animated: !call.endedAt && (call.status === 'Pending' || call.status === 'Running' || call.status === 'in_progress'),
                   style: {
-                    stroke: (String(call.status || '').toLowerCase() === 'failed' ? 'var(--red)' : 'var(--blue)'),
-                    strokeWidth: 1.1,
-                    opacity: call.endedAt ? 0.6 : 1,
+                    stroke: (call.status === 'Failed' ? 'var(--red)' : (call.endedAt ? 'var(--dim)' : 'var(--teal)')),
+                    strokeWidth: 1,
+                    opacity: call.endedAt ? 0.5 : 0.9,
                   },
                 });
-                childY += nodeKind('tool', childOpen) + LAYOUT.SUB_AGENT_CHILD_GAP;
               });
-              // Advance the parent subY cursor past the bottom of the
-              // child column if it ended below the sub-agent card itself.
-              if (childY > subY) {
-                subY = childY + LAYOUT.SUB_AGENT_GAP;
-              }
             }
-          });
-        }
-
-        // --- Tool calls + grouping (single column on the right) ---
-        if (st.calls && Object.keys(st.calls).length) {
-          const sortedCalls = Object.values(st.calls).slice().sort((a, b) => {
-            const at = a.startedAt || 0, bt = b.startedAt || 0;
-            return at - bt;
-          });
-          const items = groupToolCalls(sortedCalls);
-          const TOOL_X = 320;
-          items.forEach((entry) => {
-            if (entry.type === 'group') {
-              const groupKey = `${entry.kind}@${entry.startedAt}`;
-              const expanded = !!expandedGroups[`${agentNode.data.agentId}:${groupKey}`];
-              const nodeId = `group:${agentNode.data.agentId}:${groupKey}`;
-              const gx = TOOL_X;
-              const gy = toolY;
-              auxNodes.push({
-                id: nodeId,
-                type: 'group',
-                position: { x: gx, y: gy },
-                draggable: true,
-                selectable: true,
-                data: {
-                  kind: entry.kind,
-                  count: entry.count,
-                  totalMs: entry.totalMs,
-                  failedCount: entry.failedCount,
-                  expanded,
-                  onToggle: () => toggleGroup(agentNode.data.agentId, groupKey),
-                },
-              });
-              const groupActive = !entry.endedAt;
-              auxEdges.push({
-                id: `edge:${agentNode.id}->${nodeId}`,
-                source: agentNode.id,
-                target: nodeId,
-                animated: groupActive,
-                style: {
-                  stroke: entry.failedCount ? 'var(--red)' : (groupActive ? 'var(--teal)' : 'var(--dim)'),
-                  strokeWidth: 1.4,
-                  opacity: groupActive ? 1 : 0.7,
-                },
-              });
-              // Advance past the group header itself.
-              toolY = gy + nodeKind('group', false);
-              if (expanded) {
-                // Stack expanded children below the group node, tallying the
-                // running cursor so subsequent tools/groups push down.
-                let childY = toolY + 6;
-                entry.items.forEach((call) => {
-                  const childId = `tool:${agentNode.data.agentId}:${call.id}`;
-                  const childOpen = expandedNodes.has(childId);
-                  const childX = gx;
-                  const inactive = !!call.endedAt;
-                  auxNodes.push({
-                    id: childId,
-                    type: 'tool',
-                    position: { x: childX, y: childY },
-                    draggable: true,
-                    selectable: true,
-                    data: {
-                      id: call.id,
-                      kind: call.kind,
-                      label: call.label,
-                      status: call.status,
-                      rawInput: call.rawInput,
-                      rawOutput: call.rawOutput,
-                      content: call.content,
-                      locations: call.locations,
-                      startedAt: call.startedAt,
-                      endedAt: call.endedAt,
-                      isOpen: childOpen,
-                      onToggle: () => toggleNode(childId),
-                    },
-                    style: { opacity: inactive ? 0.85 : 1 },
-                    className: 'flow-tool-node-wrap flow-tool-node-wrap--grouped',
-                  });
-                  auxEdges.push({
-                    id: `edge:${nodeId}->${childId}`,
-                    source: nodeId,
-                    target: childId,
-                    animated: !call.endedAt && (call.status === 'Pending' || call.status === 'Running' || call.status === 'in_progress'),
-                    style: {
-                      stroke: (call.status === 'Failed' ? 'var(--red)' : (call.endedAt ? 'var(--dim)' : 'var(--teal)')),
-                      strokeWidth: 1,
-                      opacity: call.endedAt ? 0.5 : 0.9,
-                    },
-                  });
-                  childY += (childOpen ? GROUP_CHILD_ROW_OPEN : GROUP_CHILD_ROW) + 4;
-                });
-                toolY = childY;
-              }
-              toolY += LAYOUT.TOOL_GAP;
-            } else {
-              const call = entry.call;
-              const nodeId = `tool:${agentNode.data.agentId}:${call.id}`;
-              const isOpen = expandedNodes.has(nodeId);
-              const inactive = !!call.endedAt;
-              auxNodes.push({
-                id: nodeId,
-                type: 'tool',
-                position: { x: TOOL_X, y: toolY },
-                draggable: true,
-                selectable: true,
-                data: {
-                  id: call.id,
-                  kind: call.kind,
-                  label: call.label,
-                  status: call.status,
-                  rawInput: call.rawInput,
-                  rawOutput: call.rawOutput,
-                  content: call.content,
-                  locations: call.locations,
-                  startedAt: call.startedAt,
-                  endedAt: call.endedAt,
-                  isOpen,
-                  onToggle: () => toggleNode(nodeId),
-                },
-                style: inactive ? { opacity: 0.85 } : { opacity: 1 },
-              });
-              auxEdges.push({
-                id: `edge:${agentNode.id}->${nodeId}`,
-                source: agentNode.id,
-                target: nodeId,
-                animated: !call.endedAt && (call.status === 'Pending' || call.status === 'Running' || call.status === 'in_progress'),
-                style: {
-                  stroke: (call.status === 'Failed' ? 'var(--red)' : (call.endedAt ? 'var(--dim)' : 'var(--teal)')),
-                  strokeWidth: 1.2,
-                  opacity: call.endedAt ? 0.55 : 1,
-                },
-              });
-              toolY += nodeKind('tool', isOpen) + LAYOUT.TOOL_GAP;
-            }
-          });
-        }
-
-        // --- Background-task nodes (stacked below the agent) ---
-        if (Array.isArray(st.bgTerminals) && st.bgTerminals.length) {
-          // Show running first, then a few most-recent exited.
-          const running = st.bgTerminals.filter(t => !t.exited);
-          const exited  = st.bgTerminals.filter(t => t.exited);
-          const visible = running.concat(exited).slice(0, BG_NODES_VISIBLE);
-          visible.forEach((t) => {
-            const bgId = `bg:${agentNode.data.agentId}:${t.id}`;
+          } else {
+            const call = entry.call;
+            const nodeId = `tool:${agentNode.data.agentId}:${call.id}`;
+            const isOpen = expandedNodes.has(nodeId);
+            const inactive = !!call.endedAt;
             auxNodes.push({
-              id: bgId,
-              type: 'bgTask',
-              position: { x: agentNode.position.x, y: bgY },
+              id: nodeId,
+              type: 'tool',
+              position: { x: 0, y: 0 },
               draggable: true,
               selectable: true,
               data: {
-                id: t.id,
-                command: t.command || '',
-                cwd: t.cwd || '',
-                exited: !!t.exited,
-                exitStatus: t.exitStatus || null,
-                url: t.url || null,
-                startedAt: t.startedAt || null,
-                endedAt: t.endedAt || null,
+                id: call.id,
+                kind: call.kind,
+                label: call.label,
+                status: call.status,
+                rawInput: call.rawInput,
+                rawOutput: call.rawOutput,
+                content: call.content,
+                locations: call.locations,
+                startedAt: call.startedAt,
+                endedAt: call.endedAt,
+                isOpen,
+                onToggle: () => toggleNode(nodeId),
               },
+              style: inactive ? { opacity: 0.85 } : { opacity: 1 },
             });
             auxEdges.push({
-              id: `edge:${agentNode.id}->${bgId}`,
+              id: `edge:${agentNode.id}->${nodeId}`,
               source: agentNode.id,
-              sourceHandle: 'bg',
-              target: bgId,
-              targetHandle: 'bg',
-              animated: !t.exited,
+              target: nodeId,
+              animated: !call.endedAt && (call.status === 'Pending' || call.status === 'Running' || call.status === 'in_progress'),
               style: {
-                stroke: t.exited ? 'var(--dim)' : 'var(--amber)',
+                stroke: (call.status === 'Failed' ? 'var(--red)' : (call.endedAt ? 'var(--dim)' : 'var(--teal)')),
                 strokeWidth: 1.2,
-                opacity: t.exited ? 0.55 : 0.95,
+                opacity: call.endedAt ? 0.55 : 1,
               },
             });
-            bgY += nodeKind('bgTask', false) + LAYOUT.BG_GAP;
-          });
-        }
-
-        // --- Milestone strip (top of canvas) per-agent ---
-        // In scoped mode we show a single strip at canvas top. In global mode
-        // each agent's strip sits just above its row so multiple conversations
-        // don't fight for the same X scale.
-        //
-        // We used to scale x by timestamp, but that wedged closely-spaced
-        // events on top of each other and shoved the latest event to the
-        // far-right edge regardless of how isolated it was. Now we just sort
-        // chronologically and place left-to-right with a fixed step, plus a
-        // 2-row y-stagger so neighbours never collide.
-        if (Array.isArray(st.milestones) && st.milestones.length) {
-          const strip = st.milestones
-            .slice(-MILESTONE_CAP)
-            .slice()
-            .sort((a, b) => (a.t || 0) - (b.t || 0));
-          const MS_STEP_X   = MILESTONE_STEP_X;
-          const MS_ROW_DY   = MILESTONE_ROW_DY;
-          const stripBaseY  = agents.length === 1
-            ? 8
-            : (agentNode.position.y - 56);
-          strip.forEach((m, j) => {
-            const x = j * MS_STEP_X;
-            const y = stripBaseY + ((j % 2) * MS_ROW_DY);
-            auxNodes.push({
-              id: `ms:${agentNode.data.agentId}:${j}:${m.t}:${m.kind}`,
-              type: 'milestone',
-              position: { x, y },
-              draggable: false,
-              selectable: false,
-              data: m,
-            });
-          });
-        }
+          }
+        });
       }
 
-      // Cluster height = whichever column extends the furthest. Floor it at
-      // AGENT_ROW_HEIGHT_MIN so a barely-active agent still gets vertical
-      // breathing room.
-      const clusterBottom = Math.max(subY, toolY, bgY, baseY + NODE_HEIGHTS.agent.closed);
-      const clusterHeight = Math.max(AGENT_ROW_HEIGHT_MIN, clusterBottom - baseY);
-      agentY = baseY + clusterHeight + LAYOUT.AGENT_CLUSTER_GAP;
+      // --- Background-task nodes ---
+      if (Array.isArray(st.bgTerminals) && st.bgTerminals.length) {
+        // Show running first, then a few most-recent exited.
+        const running = st.bgTerminals.filter(t => !t.exited);
+        const exited  = st.bgTerminals.filter(t => t.exited);
+        const visible = running.concat(exited).slice(0, BG_NODES_VISIBLE);
+        visible.forEach((t) => {
+          const bgId = `bg:${agentNode.data.agentId}:${t.id}`;
+          auxNodes.push({
+            id: bgId,
+            type: 'bgTask',
+            position: { x: 0, y: 0 },
+            draggable: true,
+            selectable: true,
+            data: {
+              id: t.id,
+              command: t.command || '',
+              cwd: t.cwd || '',
+              exited: !!t.exited,
+              exitStatus: t.exitStatus || null,
+              url: t.url || null,
+              startedAt: t.startedAt || null,
+              endedAt: t.endedAt || null,
+            },
+          });
+          auxEdges.push({
+            id: `edge:${agentNode.id}->${bgId}`,
+            source: agentNode.id,
+            sourceHandle: 'bg',
+            target: bgId,
+            targetHandle: 'bg',
+            animated: !t.exited,
+            style: {
+              stroke: t.exited ? 'var(--dim)' : 'var(--amber)',
+              strokeWidth: 1.2,
+              opacity: t.exited ? 0.55 : 0.95,
+            },
+          });
+        });
+      }
+
+      // --- Milestone strip (deferred; placed after dagre runs) ---
+      if (Array.isArray(st.milestones) && st.milestones.length) {
+        const strip = st.milestones
+          .slice(-MILESTONE_CAP)
+          .slice()
+          .sort((a, b) => (a.t || 0) - (b.t || 0));
+        milestonesByAgent.set(agentNode.data.agentId, strip);
+      }
     });
 
-    // Apply any user-dragged overrides last. The auto-layout pass is the
-    // source of truth for everything else; user drags only override the
-    // single node they dragged.
+    // ── dagre auto-layout ───────────────────────────────────────────────
+    //
+    // We feed every non-milestone node + every edge into a single graph and
+    // let dagre arrange them. With rankdir 'LR' the agent ends up at the
+    // left of its cluster and tools/sub-agents/bg-tasks fan out to the
+    // right. Multiple agents form independent forests (no cross-agent
+    // edges) so dagre stacks the clusters automatically.
+    //
+    // The useMemo above re-runs every second (live-duration tick) but the
+    // structural shape of the graph rarely changes. We hash (nodeId, type,
+    // open) and edge endpoints into a single string, and reuse the cached
+    // layout when nothing structural changed. Dagre is the most expensive
+    // step in this render path for graphs with hundreds of nodes.
+    const layoutNodes = [...agentNodes, ...auxNodes];
+    const sigParts = [];
+    for (const n of layoutNodes) {
+      const open = !!(n.data && n.data.isOpen) || !!(n.data && n.data.expanded);
+      sigParts.push(`${n.id}|${n.type}|${open ? 1 : 0}`);
+    }
+    for (const e of auxEdges) sigParts.push(`E:${e.source}->${e.target}`);
+    const sig = sigParts.join(',');
+
+    let positions; // Map<nodeId, {x,y}>
+    let dagreMinY;
+    let agentTopY; // Map<agentId, number>
+
+    const cache = layoutCacheRef.current;
+    if (cache && cache.sig === sig) {
+      positions  = cache.positions;
+      dagreMinY  = cache.minY;
+      agentTopY  = cache.agentTopY;
+    } else {
+      const g = new dagre.graphlib.Graph({ compound: false });
+      g.setGraph({
+        rankdir: 'LR',
+        nodesep: 30,
+        ranksep: 80,
+        marginx: 20,
+        marginy: 20,
+      });
+      g.setDefaultEdgeLabel(() => ({}));
+
+      for (const n of layoutNodes) {
+        const open = !!(n.data && n.data.isOpen) || !!(n.data && n.data.expanded);
+        const w = nodeWidth(n.type, open);
+        const h = nodeKind(n.type, open);
+        g.setNode(n.id, { width: w, height: h });
+      }
+      // Only add edges where both endpoints exist. (Defensive: the build
+      // above always pairs nodes + edges, but a future SSE race could leave
+      // an orphan; dagre throws on missing endpoints.)
+      for (const e of auxEdges) {
+        if (g.hasNode(e.source) && g.hasNode(e.target)) {
+          g.setEdge(e.source, e.target);
+        }
+      }
+      dagre.layout(g);
+
+      positions = new Map();
+      dagreMinY = Infinity;
+      agentTopY = new Map();
+      for (const n of layoutNodes) {
+        const pos = g.node(n.id);
+        if (!pos) continue;
+        const open = !!(n.data && n.data.isOpen) || !!(n.data && n.data.expanded);
+        const w = nodeWidth(n.type, open);
+        const h = nodeKind(n.type, open);
+        const x = pos.x - w / 2;
+        const y = pos.y - h / 2;
+        positions.set(n.id, { x, y });
+        if (y < dagreMinY) dagreMinY = y;
+
+        // Group nodes by agent id for the milestone-strip placement.
+        let aid = null;
+        if (n.type === 'agent') aid = n.data && n.data.agentId;
+        else {
+          // ids look like "sub:<aid>:..", "tool:<aid>:..", "group:<aid>:..",
+          // "bg:<aid>:..", "subtool:<aid>:..". Pull the segment between the
+          // first and second colon.
+          const m = /^[^:]+:([^:]+):/.exec(n.id);
+          if (m) aid = m[1];
+        }
+        if (aid) {
+          const prev = agentTopY.get(aid);
+          if (prev === undefined || y < prev) agentTopY.set(aid, y);
+        }
+      }
+      if (!Number.isFinite(dagreMinY)) dagreMinY = 0;
+      layoutCacheRef.current = { sig, positions, minY: dagreMinY, agentTopY };
+    }
+
+    // Apply cached positions to every node (always; the node objects are
+    // freshly built on every memo run, but the layout snapshot is reused).
+    for (const n of layoutNodes) {
+      const p = positions.get(n.id);
+      if (p) n.position = { x: p.x, y: p.y };
+    }
+
+    // --- Place milestone nodes above the dagre output ---
+    // In scoped mode (a single agent) the strip sits at the very top of
+    // the canvas. In global mode each agent gets its own strip, anchored
+    // above that agent's cluster.
+    milestonesByAgent.forEach((strip, agentId) => {
+      const stripBaseY = agents.length === 1
+        ? (dagreMinY - 80)
+        : ((agentTopY.get(agentId) ?? dagreMinY) - 80);
+      strip.forEach((m, j) => {
+        const x = j * MILESTONE_STEP_X;
+        const y = stripBaseY + ((j % 2) * MILESTONE_ROW_DY);
+        auxNodes.push({
+          id: `ms:${agentId}:${j}:${m.t}:${m.kind}`,
+          type: 'milestone',
+          position: { x, y },
+          draggable: false,
+          selectable: false,
+          data: m,
+        });
+      });
+    });
+
+    // Apply any user-dragged overrides last. The dagre pass is the source
+    // of truth for everything else; user drags only override the single
+    // node they dragged.
     const allNodes = [...agentNodes, ...auxNodes];
     for (const n of allNodes) {
       const pos = userPositions[n.id];
