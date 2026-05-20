@@ -1190,6 +1190,11 @@ export class ChatView {
     // fallback). Used for initial history load and explicit user actions like
     // the jump-to-latest button.
     if (force) {
+      // Cancel any in-flight eased loop so it doesn't fight the snap.
+      if (this._easedScrollRaf) {
+        cancelAnimationFrame(this._easedScrollRaf);
+        this._easedScrollRaf = 0;
+      }
       if (this._scrollRaf) return;
       this._scrollRaf = requestAnimationFrame(() => {
         this._scrollRaf = 0;
@@ -1201,9 +1206,14 @@ export class ChatView {
           // the very bottom.
           const last = this.streamEl.lastElementChild;
           if (last && typeof last.scrollIntoView === 'function') {
-            try { last.scrollIntoView({ block: 'end' }); return; } catch { /* fall through */ }
+            try {
+              last.scrollIntoView({ block: 'end' });
+              this._lastEasedWrite = this.streamEl.scrollTop;
+              return;
+            } catch { /* fall through */ }
           }
           this.streamEl.scrollTop = this.streamEl.scrollHeight;
+          this._lastEasedWrite = this.streamEl.scrollTop;
         };
         doScroll();
         // Re-run once more after layout has settled so we land on the true
@@ -1232,6 +1242,7 @@ export class ChatView {
       // rAF is throttled when the tab is hidden. Snap instead so when the
       // user comes back they're already at the bottom.
       this.streamEl.scrollTop = this.streamEl.scrollHeight;
+      this._lastEasedWrite = this.streamEl.scrollTop;
       this._easedScrollPending = false;
       this._easedScrollTarget = this.streamEl.scrollTop;
       return;
@@ -1254,11 +1265,14 @@ export class ChatView {
       if (Math.abs(delta) <= 1) {
         // Land exactly and stop the loop.
         el.scrollTop = target;
+        this._lastEasedWrite = target;
         this._easedScrollPending = false;
         return;
       }
       // Ease ~0.22 per frame. At 60fps a 200px gap closes in ~10 frames.
-      el.scrollTop = current + delta * 0.22;
+      const next = current + delta * 0.22;
+      el.scrollTop = next;
+      this._lastEasedWrite = next;
       this._easedScrollRaf = requestAnimationFrame(tick);
     };
     this._easedScrollRaf = requestAnimationFrame(tick);
@@ -1273,11 +1287,13 @@ export class ChatView {
     if (!force && this._autoScrollTools === false) return;
     if (force) {
       this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
+      this._lastEasedToolsWrite = this.toolsStreamEl.scrollTop;
       this._easedToolsTarget = this.toolsStreamEl.scrollTop;
       return;
     }
     if (typeof document !== 'undefined' && document.hidden) {
       this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
+      this._lastEasedToolsWrite = this.toolsStreamEl.scrollTop;
       this._easedToolsTarget = this.toolsStreamEl.scrollTop;
       return;
     }
@@ -1293,9 +1309,12 @@ export class ChatView {
       const delta = target - current;
       if (Math.abs(delta) <= 1) {
         el.scrollTop = target;
+        this._lastEasedToolsWrite = target;
         return;
       }
-      el.scrollTop = current + delta * 0.22;
+      const next = current + delta * 0.22;
+      el.scrollTop = next;
+      this._lastEasedToolsWrite = next;
       this._easedToolsRaf = requestAnimationFrame(tick);
     };
     this._easedToolsRaf = requestAnimationFrame(tick);
@@ -1471,6 +1490,19 @@ export class ChatView {
       const el = this.streamEl;
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
       const atBottom = dist <= THRESHOLD;
+      // While the eased loop is chasing the bottom, it writes scrollTop
+      // mid-flight (still well above the bottom). Those writes raise
+      // scroll events that look identical to user scroll-aways. Suppress
+      // them by skipping when the eased loop is active AND we're moving
+      // toward the bottom (not away).
+      if (this._easedScrollRaf && !atBottom) {
+        // Currently being pulled toward bottom by our own loop. Trust the
+        // loop to keep going; only a clear "user moved further from
+        // bottom than our last write" should pause auto-scroll.
+        if (this._lastEasedWrite != null && el.scrollTop >= this._lastEasedWrite - 4) {
+          return;
+        }
+      }
       if (atBottom && !this._autoScroll) {
         this._autoScroll = true;
         this._jumpToLatestBtn.hidden = true;
@@ -1493,6 +1525,11 @@ export class ChatView {
       if (!el) return;
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
       const atBottom = dist <= THRESHOLD;
+      if (this._easedToolsRaf && !atBottom) {
+        if (this._lastEasedToolsWrite != null && el.scrollTop >= this._lastEasedToolsWrite - 4) {
+          return;
+        }
+      }
       if (atBottom && !this._autoScrollTools) {
         this._autoScrollTools = true;
       } else if (!atBottom && this._autoScrollTools) {
@@ -1515,10 +1552,12 @@ export class ChatView {
       if (this._autoScroll !== false) {
         this.streamEl.scrollTop = this.streamEl.scrollHeight;
         this._easedScrollTarget = this.streamEl.scrollTop;
+        this._lastEasedWrite = this.streamEl.scrollTop;
       }
       if (this._autoScrollTools !== false && this.toolsStreamEl) {
         this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
         this._easedToolsTarget = this.toolsStreamEl.scrollTop;
+        this._lastEasedToolsWrite = this.toolsStreamEl.scrollTop;
       }
     };
     document.addEventListener('visibilitychange', onVis);
