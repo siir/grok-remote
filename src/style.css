@@ -136,6 +136,16 @@ body::before {
   font-size: 13px;
   min-width: 22px;
 }
+.brand-active {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  margin-left: -2px;
+  animation: agent-inflight-pulse 1.2s ease-in-out infinite;
+}
+.brand-active[hidden] { display: none; }
 @keyframes brand-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.55; transform: scale(0.85); }
@@ -616,6 +626,30 @@ body::before {
   white-space: nowrap;
 }
 .tab-tokens[hidden] { display: none; }
+
+.tab-inflight {
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 4px 8px 4px 6px;
+  border: 1px solid rgba(252, 168, 84, 0.35);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tab-inflight[hidden] { display: none; }
+.tab-inflight-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: agent-inflight-pulse 1.2s ease-in-out infinite;
+}
 .agent-cwd {
   margin-top: 4px;
   font-size: 11px;

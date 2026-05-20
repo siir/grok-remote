@@ -325,6 +325,21 @@ function mountDashboard() {
     });
   }
 
+  // "Any agent active" indicator on the brand. Listens to the same
+  // agents-refresh event the sidebar dispatches and shows a pulsing
+  // amber dot whenever at least one agent has inFlight > 0 or is running.
+  const brandActive = document.getElementById('brand-active');
+  if (brandActive) {
+    document.addEventListener('grok-remote:agents-refresh', (ev) => {
+      const list = (ev && ev.detail) || [];
+      const active = list.some((a) =>
+        (typeof a?.inFlight === 'number' && a.inFlight > 0) ||
+        (a?.status === 'running')
+      );
+      brandActive.hidden = !active;
+    });
+  }
+
   // close drawer when a sidebar agent is picked on narrow screens.
   shell.addEventListener('click', (ev) => {
     if (!document.body.hasAttribute('data-drawer-open')) return;

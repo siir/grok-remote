@@ -196,6 +196,7 @@ export class ChatView {
       onclick: () => this.copyConversation(),
     }, 'copy conversation');
     this.tokensPill = el('span', { class: 'tab-tokens', hidden: true });
+    this.inflightPill = el('span', { class: 'tab-inflight', hidden: true });
     return el('nav', { class: 'tabs' },
       this.tabBtns.conversation,
       this.tabBtns.files,
@@ -203,12 +204,28 @@ export class ChatView {
       this.tabBtns.trace,
       this.tabBtns.flow,
       el('span', { class: 'tabs-spacer' }),
+      this.inflightPill,
       this.tokensPill,
       this.starBtn,
       this.settingsBtn,
       this.connectBtn,
       this.copyConvoBtn,
     );
+  }
+
+  _renderInflightPill() {
+    const n = this.currentAgent && this.currentAgent.inFlight;
+    if (typeof n === 'number' && n > 0) {
+      this.inflightPill.hidden = false;
+      this.inflightPill.replaceChildren(
+        el('span', { class: 'tab-inflight-dot' }),
+        document.createTextNode(`${n} tool${n === 1 ? '' : 's'}`),
+      );
+      this.inflightPill.title = `${n} tool call${n === 1 ? '' : 's'} in flight`;
+    } else {
+      this.inflightPill.hidden = true;
+      this.inflightPill.replaceChildren();
+    }
   }
 
   _renderTokensPill() {
@@ -284,6 +301,7 @@ export class ChatView {
     // Keep the drawer's "reconnect to apply" notice in sync with status.
     if (this.settingsDrawerOpen) this._updateSettingsNotice(a);
     this._renderTokensPill();
+    this._renderInflightPill();
   }
 
   _syncConnectBtn() {
@@ -621,6 +639,7 @@ export class ChatView {
       if (this.settingsBtn) this.settingsBtn.hidden = true;
       if (this.connectBtn)  this.connectBtn.hidden = true;
       if (this.tokensPill)  this.tokensPill.hidden = true;
+      if (this.inflightPill) this.inflightPill.hidden = true;
       this.closeSettingsDrawer();
       return;
     }
@@ -635,6 +654,7 @@ export class ChatView {
     this.composerCancel.disabled = true;
     this._syncConnectBtn();
     this._renderTokensPill();
+    this._renderInflightPill();
     this._syncStarBtn();
 
     if (this.tabsState === 'files') {
@@ -1060,6 +1080,7 @@ export class ChatView {
     if (meta && (meta.totalTokens != null || meta.total_tokens != null)) {
       this.latestTotalTokens = meta.totalTokens ?? meta.total_tokens;
       this._renderTokensPill();
+    this._renderInflightPill();
     }
     // Capture sessionId/cwd from prompt_complete meta if the agent record is
     // missing it (handshake metadata is sometimes delivered out of band).
