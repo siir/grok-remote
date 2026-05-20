@@ -75,6 +75,17 @@ export class AgentsSidebar {
       onclick: () => document.dispatchEvent(new CustomEvent('grok-remote:close-drawer')),
     }, '×');
 
+    // Desktop collapse toggle. Toggles a class on the dashboard root that
+    // shrinks the sidebar column to 0. A reopen tab on the left edge of
+    // main brings it back. State persists in localStorage.
+    this.sidebarCollapseBtn = el('button', {
+      class: 'sidebar-collapse-btn',
+      type: 'button',
+      title: 'collapse sidebar',
+      'aria-label': 'collapse sidebar',
+      onclick: () => document.dispatchEvent(new CustomEvent('grok-remote:sidebar-toggle')),
+    }, '⟨');
+
     this.archivedToggle = el('button', {
       class: 'agents-archived-toggle',
       type: 'button',
@@ -126,6 +137,7 @@ export class AgentsSidebar {
     this.root = el('aside', { class: 'sidebar' },
       el('div', { class: 'sidebar-head' },
         el('span', { class: 'sidebar-title' }, 'agents'),
+        this.sidebarCollapseBtn,
         this.newBtn,
         this.closeDrawerBtn,
       ),

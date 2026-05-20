@@ -237,7 +237,7 @@ function toggleDrawer() {
 
 // ── dashboard mount ────────────────────────────────────────────────────
 
-function makeRailIcon({ href, title, area, iconName }) {
+function makeRailIcon({ href, title, area, iconName, label }) {
   // Build the icon element via innerHTML since iconHtml() returns a full
   // <svg> string. el() doesn't accept raw HTML by default, so we wrap it
   // in a span and assign innerHTML once.
@@ -252,17 +252,19 @@ function makeRailIcon({ href, title, area, iconName }) {
   icon.className = 'left-rail-icon';
   icon.innerHTML = iconHtml(iconName);
   a.appendChild(icon);
+  const lbl = el('span', { class: 'left-rail-label' }, label || title);
+  a.appendChild(lbl);
   return a;
 }
 
 function buildLeftRail() {
   const rail = el('nav', { class: 'left-rail', 'aria-label': 'top-level navigation' });
   rail.appendChild(makeRailIcon({
-    href: '#/', title: 'conversations', area: 'home', iconName: 'home',
+    href: '#/', title: 'conversations', area: 'home', iconName: 'home', label: 'chats',
   }));
   for (const p of SYSTEM_PAGES) {
     rail.appendChild(makeRailIcon({
-      href: `#/${p.area}`, title: p.label, area: p.area, iconName: p.iconName,
+      href: `#/${p.area}`, title: p.label, area: p.area, iconName: p.iconName, label: p.label,
     }));
   }
   return rail;
@@ -306,6 +308,7 @@ function mountDashboard() {
   shell.appendChild(railHost);
   sidebar.mount(shell);          // appends sidebar.root + starts polling
   shell.appendChild(mainHost);
+  installSidebarResize(shell, sidebar);
 
   // hook up settings button in topbar
   const settingsBtn = document.getElementById('open-settings');
@@ -489,6 +492,95 @@ document.addEventListener('DOMContentLoaded', async () => {
   // wire PWA install banner + service worker.
   registerPwa();
 });
+
+// ── Resizable + collapsible sidebar ──────────────────────────────────────
+function installSidebarResize(shell, sidebar) {
+  const SIDEBAR_W_KEY  = 'grok-remote.sidebar.width';
+  const SIDEBAR_C_KEY  = 'grok-remote.sidebar.collapsed';
+
+  // Restore persisted state.
+  try {
+    const w = parseInt(localStorage.getItem(SIDEBAR_W_KEY) || '', 10);
+    if (Number.isFinite(w) && w >= 200 && w <= 600) {
+      shell.style.setProperty('--sidebar-width', `${w}px`);
+    }
+    if (localStorage.getItem(SIDEBAR_C_KEY) === '1') {
+      shell.classList.add('dashboard--sidebar-collapsed');
+      updateCollapseBtn(true);
+    }
+  } catch { /* ignore */ }
+
+  // Drag handle (only visible on desktop while sidebar is expanded).
+  const handle = el('div', { class: 'sidebar-resize-handle', title: 'drag to resize' });
+  shell.appendChild(handle);
+  positionHandle();
+
+  const onResize = () => positionHandle();
+  window.addEventListener('resize', onResize);
+
+  handle.addEventListener('mousedown', (ev) => {
+    if (shell.classList.contains('dashboard--sidebar-collapsed')) return;
+    ev.preventDefault();
+    const startX = ev.clientX;
+    const startW = sidebar.root.getBoundingClientRect().width;
+    const onMove = (e) => {
+      const dx = e.clientX - startX;
+      const w = Math.max(220, Math.min(560, startW + dx));
+      shell.style.setProperty('--sidebar-width', `${w}px`);
+      positionHandle();
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      const w = sidebar.root.getBoundingClientRect().width;
+      try { localStorage.setItem(SIDEBAR_W_KEY, String(Math.round(w))); } catch { /* ignore */ }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  // Reopen tab pinned to the left edge of main when collapsed.
+  const reopenBtn = el('button', {
+    type: 'button',
+    class: 'sidebar-reopen-tab',
+    title: 'expand sidebar',
+    'aria-label': 'expand sidebar',
+    hidden: !shell.classList.contains('dashboard--sidebar-collapsed'),
+    onclick: () => toggleCollapse(),
+  }, '⟩');
+  shell.appendChild(reopenBtn);
+
+  function toggleCollapse(forceState) {
+    const next = (typeof forceState === 'boolean')
+      ? forceState
+      : !shell.classList.contains('dashboard--sidebar-collapsed');
+    shell.classList.toggle('dashboard--sidebar-collapsed', next);
+    updateCollapseBtn(next);
+    reopenBtn.hidden = !next;
+    positionHandle();
+    try { localStorage.setItem(SIDEBAR_C_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+  }
+
+  function updateCollapseBtn(collapsed) {
+    const btn = sidebar.sidebarCollapseBtn;
+    if (!btn) return;
+    btn.textContent = collapsed ? '⟩' : '⟨';
+    btn.title = collapsed ? 'expand sidebar' : 'collapse sidebar';
+  }
+
+  function positionHandle() {
+    // Place the handle at the sidebar/main seam.
+    if (shell.classList.contains('dashboard--sidebar-collapsed')) {
+      handle.style.display = 'none';
+      return;
+    }
+    handle.style.display = '';
+    const rect = sidebar.root.getBoundingClientRect();
+    handle.style.left = `${rect.right - 2}px`;
+  }
+
+  document.addEventListener('grok-remote:sidebar-toggle', () => toggleCollapse());
+}
 
 // ── Background-process tracker (persistent across pages + reloads) ──────
 // Polls /api/system/bg-terminals every 3s while the tab is visible. Shows

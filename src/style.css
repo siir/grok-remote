@@ -3736,7 +3736,70 @@ body::before {
 /* Each system page sub-agent appends to its own marker section below. */
 
 .dashboard--with-rail {
-  grid-template-columns: 52px 280px 1fr;
+  grid-template-columns: 68px var(--sidebar-width, 280px) 1fr;
+  position: relative;
+}
+.dashboard--with-rail.dashboard--sidebar-collapsed {
+  grid-template-columns: 68px 0 1fr;
+}
+.dashboard--sidebar-collapsed .sidebar {
+  display: none;
+}
+
+/* Vertical handle on the sidebar/main seam: drag to resize, hover to highlight. */
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 20;
+  transition: background 0.15s;
+}
+.sidebar-resize-handle:hover { background: var(--teal); opacity: 0.55; }
+
+/* Edge tab to reopen the sidebar after collapsing. */
+.sidebar-reopen-tab {
+  position: absolute;
+  top: 50%;
+  /* Sits at the left edge of the main pane (= 68px rail). */
+  left: 68px;
+  transform: translateY(-50%);
+  z-index: 22;
+  width: 16px;
+  height: 56px;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+}
+.sidebar-reopen-tab:hover { color: var(--teal); border-color: var(--teal); }
+.sidebar-reopen-tab[hidden] { display: none; }
+
+/* Header collapse button inside the sidebar (desktop only). */
+.sidebar-collapse-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1;
+  margin-left: auto;
+}
+.sidebar-collapse-btn:hover { color: var(--teal); border-color: var(--teal); }
+@media (max-width: 720px) {
+  .sidebar-collapse-btn { display: none; }
+  .sidebar-resize-handle { display: none; }
+  .sidebar-reopen-tab { display: none; }
 }
 .left-rail {
   background: var(--bg);
@@ -3748,12 +3811,15 @@ body::before {
   padding: 12px 0;
 }
 .left-rail-item {
-  width: 40px;
-  height: 40px;
+  width: 56px;
+  min-height: 52px;
   border-radius: 8px;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
   color: var(--muted);
   text-decoration: none;
   border: 1px solid transparent;
@@ -3766,6 +3832,19 @@ body::before {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+.left-rail-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: inherit;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 48px;
+  line-height: 1.1;
 }
 .left-rail-icon svg {
   width: 20px;
