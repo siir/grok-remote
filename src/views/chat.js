@@ -976,8 +976,13 @@ export class ChatView {
         const name = ev.event || ev.type || ev.name;
         const data = ev.data || ev.payload || ev;
         if (!name) continue;
+        // Stash event timestamp so bubble renders pick up the real time
+        // rather than "now" during a history replay.
+        const t = Date.parse(ev.at);
+        if (Number.isFinite(t)) this._lastEventTs = t;
         this.handleEvent(name, data, { fromHistory: true });
       }
+      this._lastEventTs = null;
       // Scroll the stream to the bottom after a history load. Reset
       // auto-scroll: the user just opened the conversation, they want to be
       // at the latest message regardless of where the last session ended.
@@ -1041,11 +1046,12 @@ export class ChatView {
 
   ensureTurn() {
     if (this.activeTurn) return this.activeTurn;
-    return this.startTurn('');
+    return this.startTurn('', { ts: this._lastEventTs || Date.now() });
   }
 
-  startTurn(userText) {
-    const userBubble = renderUserBubble(userText);
+  startTurn(userText, opts) {
+    const ts = (opts && opts.ts) || Date.now();
+    const userBubble = renderUserBubble(userText, ts);
     const root = el('div', { class: 'turn' }, userBubble);
     this.streamEl.appendChild(root);
     const turn = {
@@ -1080,14 +1086,32 @@ export class ChatView {
   scrollToBottom(opts) {
     // Stay pinned to the bottom only when the user hasn't scrolled away.
     // Force-scroll on explicit actions (sending a message, initial load).
-    if (!(opts && opts.force) && this._autoScroll === false) return;
+    const force = !!(opts && opts.force);
+    if (!force && this._autoScroll === false) return;
     // Coalesce: scrollHeight access forces synchronous layout. During
     // streaming many handlers call this back-to-back; rAF batches them
     // to one layout per frame.
     if (this._scrollRaf) return;
     this._scrollRaf = requestAnimationFrame(() => {
       this._scrollRaf = 0;
-      this.streamEl.scrollTop = this.streamEl.scrollHeight;
+      const doScroll = () => {
+        // content-visibility: auto on .turn makes scrollHeight unreliable
+        // until the browser has actually rendered the off-screen turns. Use
+        // scrollIntoView on the last child when forcing (initial load /
+        // explicit user actions); it triggers the lazy layout for any
+        // sibling on the way and lands accurately at the very bottom.
+        const last = this.streamEl.lastElementChild;
+        if (force && last && typeof last.scrollIntoView === 'function') {
+          try { last.scrollIntoView({ block: 'end' }); return; } catch { /* fall through */ }
+        }
+        this.streamEl.scrollTop = this.streamEl.scrollHeight;
+      };
+      doScroll();
+      if (force) {
+        // Re-run once more after layout has settled so we land on the true
+        // bottom even after content-visibility realizes the placeholders.
+        requestAnimationFrame(doScroll);
+      }
     });
   }
 
@@ -1542,7 +1566,7 @@ export class ChatView {
     if (text == null) return;
     const turn = this.ensureTurn();
     if (!turn.assistant) {
-      turn.assistant = renderAssistantBubble();
+      turn.assistant = renderAssistantBubble(this._lastEventTs || Date.now());
       turn.root.appendChild(turn.assistant.node);
     }
     turn.assistant.append(text);

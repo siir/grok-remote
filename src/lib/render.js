@@ -77,17 +77,34 @@ function inlineMd(s) {
 
 // ── Conversation blocks ────────────────────────────────────────────────
 
-export function renderUserBubble(text) {
+function fmtClock(d) {
+  // HH:MM in the user's locale, 24h. Empty when d isn't a valid date.
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+export function renderUserBubble(text, ts) {
+  const when = ts ? new Date(ts) : new Date();
   return el('div', { class: 'msg msg--user' },
-    el('div', { class: 'msg-role' }, 'you'),
+    el('div', { class: 'msg-head' },
+      el('span', { class: 'msg-role' }, 'you'),
+      el('span', { class: 'msg-time', title: when.toISOString() }, fmtClock(when)),
+    ),
     el('div', { class: 'msg-body' }, renderMarkdownLight(text)),
   );
 }
 
-export function renderAssistantBubble() {
+export function renderAssistantBubble(ts) {
+  const when = ts ? new Date(ts) : new Date();
   const body = el('div', { class: 'msg-body' });
+  const timeEl = el('span', { class: 'msg-time', title: when.toISOString() }, fmtClock(when));
   const node = el('div', { class: 'msg msg--assistant' },
-    el('div', { class: 'msg-role' }, 'grok'),
+    el('div', { class: 'msg-head' },
+      el('span', { class: 'msg-role' }, 'grok'),
+      timeEl,
+    ),
     body,
   );
   let buf = '';
@@ -100,6 +117,11 @@ export function renderAssistantBubble() {
     text() { return buf; },
     finalize() {
       node.classList.add('msg--done');
+      // Snap timestamp to when the turn actually finished if it didn't get
+      // updated mid-stream.
+      const now = new Date();
+      timeEl.textContent = fmtClock(now);
+      timeEl.title = now.toISOString();
     },
   };
 }
