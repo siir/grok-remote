@@ -304,6 +304,18 @@ async function handleApi(req, res, url, method) {
     if (suffix === '/stream' && method === 'GET') {
       return handleStream(req, res, id);
     }
+    if (suffix === '/terminals' && method === 'GET') {
+      return handleTerminalList(req, res, rec);
+    }
+    {
+      const tmatch = suffix.match(/^\/terminals\/([^/]+)(\/kill)?$/);
+      if (tmatch) {
+        const tid = tmatch[1];
+        const kill = !!tmatch[2];
+        if (kill && method === 'POST')  return handleTerminalKill(req, res, rec, tid);
+        if (!kill && method === 'GET')  return handleTerminalRead(req, res, rec, tid);
+      }
+    }
     if (suffix === '/publish' && method === 'POST') {
       // Wraps `grok share <sessionId>`. The agent must have a sessionId,
       // either live (currently connected) or persisted from a prior run.
@@ -634,6 +646,50 @@ function handleFilesRaw(req, res, rec, method) {
   const stream = fs.createReadStream(target);
   stream.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
   stream.pipe(res);
+}
+
+function handleTerminalList(req, res, rec) {
+  const host = rec && rec.client && rec.client.terminalHost;
+  if (!host || !host._terminals) return sendJson(res, 200, { ok: true, terminals: [] });
+  const out = [];
+  for (const t of host._terminals.values()) {
+    out.push({
+      id: t.id,
+      command: t.command,
+      cwd: t.cwd,
+      exited: !!t.exited,
+      exitStatus: t.exitStatus || null,
+      bytes: t.buffer ? t.buffer.length : 0,
+      truncated: !!t.truncated,
+    });
+  }
+  return sendJson(res, 200, { ok: true, terminals: out });
+}
+
+function handleTerminalRead(req, res, rec, tid) {
+  const host = rec && rec.client && rec.client.terminalHost;
+  const t = host && host._terminals && host._terminals.get(tid);
+  if (!t) return sendJson(res, 404, { ok: false, error: 'terminal not found' });
+  return sendJson(res, 200, {
+    ok: true,
+    id: t.id,
+    command: t.command,
+    cwd: t.cwd,
+    exited: !!t.exited,
+    exitStatus: t.exitStatus || null,
+    truncated: !!t.truncated,
+    output: t.buffer ? t.buffer.toString('utf8') : '',
+  });
+}
+
+function handleTerminalKill(req, res, rec, tid) {
+  const host = rec && rec.client && rec.client.terminalHost;
+  const t = host && host._terminals && host._terminals.get(tid);
+  if (!t) return sendJson(res, 404, { ok: false, error: 'terminal not found' });
+  try {
+    if (t.proc && !t.exited) t.proc.kill('SIGTERM');
+  } catch { /* ignore */ }
+  return sendJson(res, 200, { ok: true });
 }
 
 function handleAgentsStream(req, res) {

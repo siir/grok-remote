@@ -82,11 +82,20 @@ export class ChatView {
     this._inFlightMap = new Map(); // toolCallId -> { kind, label, startedAt, chip }
     this._inFlightTimer = null;
 
+    // Background terminals strip: lists long-running shells launched by the
+    // agent ([bg] tool calls). Click a chip to view live output. Polls the
+    // /api/agents/:id/terminals endpoint every 2s while an agent is selected.
+    this.bgTermsStripEl = el('div', { class: 'bgterms-strip', hidden: true });
+    this._bgTermsByCard = new Map(); // tid -> chip element
+    this._bgTermsTimer = null;
+    this._bgTermViewerEl = null;
+
     this.root = el('section', { class: 'chat' },
       this.tabsEl,
       el('div', { class: 'chat-body' },
         el('div', { class: 'pane pane--conversation' },
           this.statusEl,
+          this.bgTermsStripEl,
           this.inFlightStripEl,
           this.streamEl,
           this.composerEl,
@@ -156,6 +165,7 @@ export class ChatView {
     if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
     if (this._detachAutoScroll) { try { this._detachAutoScroll(); } catch { /* ignore */ } this._detachAutoScroll = null; }
     if (this._inFlightTimer) { try { clearInterval(this._inFlightTimer); } catch { /* ignore */ } this._inFlightTimer = null; }
+    this._stopBgTerminalsPolling();
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
     if (this._onAgentsRefresh) {
@@ -181,20 +191,25 @@ export class ChatView {
       trace:        make('trace',        'Trace'),
       flow:         make('flow',         'Flow'),
     };
-    this.starBtn = el('button', {
-      class: 'chat-star',
+    const starBtn = el('button', {
+      class: 'chat-star tab-action tab-action--icon',
       type: 'button',
       title: 'Star this conversation',
       'aria-label': 'star conversation',
       onclick: () => this.toggleStar(),
-    }, '☆');
-    this.settingsBtn = el('button', {
-      class: 'chat-settings',
+    });
+    starBtn.innerHTML = `<span class="tab-action-ico">${iconHtml('star')}</span><span class="tab-action-text">star</span>`;
+    this.starBtn = starBtn;
+
+    const settingsBtn = el('button', {
+      class: 'chat-settings tab-action tab-action--icon',
       type: 'button',
       title: 'Per-conversation grok settings (model, reasoning effort, rules, ...)',
       'aria-label': 'open settings drawer',
       onclick: () => this.toggleSettingsDrawer(),
-    }, '⚙');
+    });
+    settingsBtn.innerHTML = `<span class="tab-action-ico">${iconHtml('settings')}</span><span class="tab-action-text">settings</span>`;
+    this.settingsBtn = settingsBtn;
     this.connectBtn = el('button', {
       class: 'tab-action tab-action--toggle',
       type: 'button',
@@ -703,11 +718,15 @@ export class ChatView {
     if (this.connectBtn)  this.connectBtn.hidden = false;
 
     const switchingAgent = this.agentId !== agent.id;
-    if (switchingAgent) this._clearAllInFlight();
+    if (switchingAgent) {
+      this._clearAllInFlight();
+      this._stopBgTerminalsPolling();
+    }
     this.agentId = agent.id;
     this.currentAgent = agent;
     this.latestTotalTokens = (agent && agent.totalTokens) || null;
     if (switchingAgent) this._lastRenderedTokens = 0;
+    this._startBgTerminalsPolling();
     this._setComposerEnabled(true);
     this.composerCancel.disabled = true;
     this._syncConnectBtn();
@@ -1127,6 +1146,120 @@ export class ChatView {
 
   _syncInFlightVisibility() {
     this.inFlightStripEl.hidden = this._inFlightMap.size === 0;
+  }
+
+  // ── background terminals strip ───────────────────────────────────────
+
+  _startBgTerminalsPolling() {
+    if (this._bgTermsTimer) return;
+    const tick = async () => {
+      if (!this.agentId) return;
+      if (document.hidden) return;
+      try {
+        const res = await api.terminals.list(this.agentId);
+        const list = (res && Array.isArray(res.terminals)) ? res.terminals : [];
+        this._renderBgTermsStrip(list);
+      } catch { /* server may not implement the route yet */ }
+    };
+    tick();
+    this._bgTermsTimer = setInterval(tick, 2000);
+  }
+
+  _stopBgTerminalsPolling() {
+    if (this._bgTermsTimer) { clearInterval(this._bgTermsTimer); this._bgTermsTimer = null; }
+    this._bgTermsByCard.clear();
+    this.bgTermsStripEl.replaceChildren();
+    this.bgTermsStripEl.hidden = true;
+    this._closeBgTermViewer();
+  }
+
+  _renderBgTermsStrip(list) {
+    // Show running first, then recently exited (last ~60s). Hide if empty.
+    const now = Date.now();
+    const recent = list.filter(t => !t.exited || (t.exitedAt == null) || (now - (t.exitedAt || now) < 60_000));
+    if (!recent.length) {
+      this.bgTermsStripEl.replaceChildren();
+      this.bgTermsStripEl.hidden = true;
+      return;
+    }
+    this.bgTermsStripEl.hidden = false;
+    const seen = new Set();
+    this.bgTermsStripEl.replaceChildren();
+    // Header label
+    this.bgTermsStripEl.appendChild(el('span', { class: 'bgterms-label' }, 'bg shells'));
+    for (const t of recent) {
+      seen.add(t.id);
+      const exited = !!t.exited;
+      const code = t.exitStatus && (t.exitStatus.exitCode ?? t.exitStatus.signal);
+      const short = t.id.replace(/^term-/, '').slice(0, 6);
+      const cmdShort = (t.command || '').length > 60 ? (t.command || '').slice(0, 57) + '...' : (t.command || '');
+      const chip = el('button', {
+        type: 'button',
+        class: `bgterms-chip ${exited ? 'bgterms-chip--exited' : 'bgterms-chip--running'}`,
+        title: `${t.command}\ncwd: ${t.cwd}\n${exited ? `exit ${code}` : 'running'}`,
+        onclick: () => this._openBgTermViewer(t.id),
+      },
+        el('span', { class: 'bgterms-chip__dot' }),
+        el('span', { class: 'bgterms-chip__id' }, short),
+        el('span', { class: 'bgterms-chip__cmd' }, cmdShort || '(no command)'),
+        el('span', { class: 'bgterms-chip__status' },
+          exited ? `exit ${code ?? '?'}` : 'running'),
+      );
+      this.bgTermsStripEl.appendChild(chip);
+    }
+    // Drop tracked chips no longer present.
+    for (const tid of Array.from(this._bgTermsByCard.keys())) {
+      if (!seen.has(tid)) this._bgTermsByCard.delete(tid);
+    }
+  }
+
+  async _openBgTermViewer(tid) {
+    // Modal-style overlay with output buffer. Polls every 1s while open.
+    this._closeBgTermViewer();
+    const overlay = el('div', { class: 'bgterm-viewer' });
+    const closeBtn = el('button', {
+      type: 'button', class: 'bgterm-viewer__close',
+      onclick: () => this._closeBgTermViewer(),
+    }, '×');
+    const title = el('div', { class: 'bgterm-viewer__title' }, tid);
+    const cmd   = el('div', { class: 'bgterm-viewer__cmd' }, '');
+    const status= el('div', { class: 'bgterm-viewer__status' }, '');
+    const pre   = el('pre', { class: 'bgterm-viewer__body' }, '');
+    const killBtn = el('button', {
+      type: 'button', class: 'bgterm-viewer__kill',
+      onclick: async () => {
+        killBtn.disabled = true;
+        try { await api.terminals.kill(this.agentId, tid); } catch { /* ignore */ }
+      },
+    }, 'kill');
+    overlay.appendChild(el('div', { class: 'bgterm-viewer__head' }, title, status, killBtn, closeBtn));
+    overlay.appendChild(cmd);
+    overlay.appendChild(pre);
+    document.body.appendChild(overlay);
+    this._bgTermViewerEl = overlay;
+
+    const refresh = async () => {
+      if (!this._bgTermViewerEl) return;
+      try {
+        const r = await api.terminals.read(this.agentId, tid);
+        if (!this._bgTermViewerEl) return;
+        cmd.textContent = r.command || '';
+        const code = r.exitStatus && (r.exitStatus.exitCode ?? r.exitStatus.signal);
+        status.textContent = r.exited ? `exited (${code ?? '?'})` : 'running';
+        status.className = `bgterm-viewer__status ${r.exited ? 'bgterm-viewer__status--exited' : 'bgterm-viewer__status--running'}`;
+        const wasAtBottom = (pre.scrollTop + pre.clientHeight) >= (pre.scrollHeight - 12);
+        pre.textContent = (r.truncated ? '[... older output trimmed ...]\n' : '') + (r.output || '');
+        if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
+        if (r.exited) killBtn.disabled = true;
+      } catch { /* ignore */ }
+    };
+    await refresh();
+    this._bgTermViewerTimer = setInterval(refresh, 1000);
+  }
+
+  _closeBgTermViewer() {
+    if (this._bgTermViewerTimer) { clearInterval(this._bgTermViewerTimer); this._bgTermViewerTimer = null; }
+    if (this._bgTermViewerEl) { this._bgTermViewerEl.remove(); this._bgTermViewerEl = null; }
   }
 
   _startInFlightTicker() {

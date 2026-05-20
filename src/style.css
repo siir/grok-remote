@@ -492,33 +492,31 @@ body::before {
 .agent-kill:hover,
 .agent-archive:hover { color: var(--amber); }
 
-/* Star toggle (sidebar + chat header share these visuals) */
-.agent-star,
-.chat-star {
+/* Star toggle - sidebar version (unicode glyph) */
+.agent-star {
   background: transparent;
   border: none;
   color: var(--dim);
   font-family: var(--mono);
-  font-size: 18px;       /* bigger, readable glyph */
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
-  padding: 4px 6px;      /* finger-sized tap target */
+  padding: 4px 6px;
   border-radius: 4px;
   transition: color 0.15s, background 0.15s, transform 0.1s;
 }
-.agent-star:hover,
-.chat-star:hover {
-  color: var(--amber);
-  background: rgba(252, 168, 84, 0.10);
-}
-.agent-star:active,
-.chat-star:active { transform: scale(0.92); }
-.agent-star.is-on,
-.chat-star.is-on { color: var(--amber); }
-.agent-star.is-on:hover,
-.chat-star.is-on:hover { color: var(--amber); }
-.agent-star:disabled,
-.chat-star:disabled { opacity: 0.4; cursor: not-allowed; }
+.agent-star:hover { color: var(--amber); background: rgba(252, 168, 84, 0.10); }
+.agent-star:active { transform: scale(0.92); }
+.agent-star.is-on { color: var(--amber); }
+.agent-star.is-on:hover { color: var(--amber); }
+.agent-star:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Chat-header buttons (star + settings) use the SVG-icon tab-action style.
+   The actual visual rules live under .tab-action / .tab-action--icon. The
+   only specific bit: when the star toggles on, fill the icon amber. */
+.chat-star.is-on .tab-action-ico,
+.chat-star.is-on { color: var(--amber); border-color: rgba(252, 168, 84, 0.5); }
+.chat-star.is-on .tab-action-ico svg path { fill: currentColor; }
 
 /* Sidebar × / archive close-button. Bigger and clearly tappable. */
 .agent-kill,
@@ -770,6 +768,150 @@ body::before {
   position: relative;
 }
 .pane.hidden { display: none; }
+
+/* Background terminals strip pinned above the chat stream */
+.bgterms-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-bottom: 1px dashed var(--border);
+  background: linear-gradient(180deg, rgba(121, 192, 255, 0.05), transparent);
+}
+.bgterms-strip[hidden] { display: none; }
+.bgterms-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-family: var(--mono);
+  margin-right: 4px;
+}
+.bgterms-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 320px;
+  min-width: 0;
+}
+.bgterms-chip:hover { background: var(--panel); }
+.bgterms-chip--running { border-color: rgba(94, 234, 212, 0.45); }
+.bgterms-chip--exited  { border-color: var(--border); opacity: 0.7; }
+.bgterms-chip__dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--teal);
+}
+.bgterms-chip--running .bgterms-chip__dot {
+  animation: agent-inflight-pulse 1.2s ease-in-out infinite;
+}
+.bgterms-chip--exited .bgterms-chip__dot { background: var(--dim); }
+.bgterms-chip__id {
+  color: var(--blue);
+  font-weight: 600;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+.bgterms-chip__cmd {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.bgterms-chip__status {
+  font-size: 9.5px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+.bgterms-chip--running .bgterms-chip__status { color: var(--teal); }
+.bgterms-chip--exited  .bgterms-chip__status { color: var(--muted); }
+
+/* Background terminal output viewer overlay */
+.bgterm-viewer {
+  position: fixed;
+  inset: 5vh 5vw;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--teal);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.bgterm-viewer__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.bgterm-viewer__title {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--blue);
+  font-weight: 600;
+}
+.bgterm-viewer__cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 6px 12px;
+  border-bottom: 1px dashed var(--border);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.bgterm-viewer__status {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  letter-spacing: 0.04em;
+}
+.bgterm-viewer__status--running { color: var(--teal); }
+.bgterm-viewer__status--exited  { color: var(--muted); }
+.bgterm-viewer__kill,
+.bgterm-viewer__close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: auto;
+}
+.bgterm-viewer__kill { color: var(--red); border-color: var(--red); margin-left: auto; }
+.bgterm-viewer__close { margin-left: 0; }
+.bgterm-viewer__kill:disabled { opacity: 0.4; cursor: not-allowed; }
+.bgterm-viewer__body {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-y: auto;
+}
 
 /* Active jobs strip pinned above the chat stream */
 .inflight-strip {
@@ -4616,26 +4758,31 @@ body::before {
   overflow-y: auto;
 }
 
-/* ----- settings-drawer ----- */
-.chat-settings {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 8px;
-  margin: 0 2px 1px;
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+/* ----- chat header SVG-icon action buttons (star + settings) -----
+   Same outer shape as .tab-action so they sit cleanly in the tabs row,
+   but with a leading inline-flex icon + a small label next to it. */
+.tab-action--icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
 }
-.chat-settings:hover:not(:disabled) {
-  color: var(--teal);
-  border-color: var(--border-2);
-  background: var(--panel);
+.tab-action--icon .tab-action-ico {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: inherit;
 }
-.chat-settings:disabled { opacity: 0.5; cursor: not-allowed; }
+.tab-action--icon .tab-action-ico svg {
+  width: 14px;
+  height: 14px;
+}
+.tab-action--icon .tab-action-text {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.chat-settings:disabled,
+.chat-star:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .chat { position: relative; }
 .chat-settings-drawer {

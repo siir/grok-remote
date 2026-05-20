@@ -85,6 +85,12 @@ export const api = {
   fileRawUrl:   (id, p)       => `/api/agents/${encodeURIComponent(id)}/files/raw?path=${encodeURIComponent(p || '')}`,
   trace:        (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}/trace`),
 
+  terminals:    {
+    list:   (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}/terminals`),
+    read:   (id, tid)     => request('GET',    `/api/agents/${encodeURIComponent(id)}/terminals/${encodeURIComponent(tid)}`),
+    kill:   (id, tid)     => request('POST',   `/api/agents/${encodeURIComponent(id)}/terminals/${encodeURIComponent(tid)}/kill`),
+  },
+
   getSettings:  ()            => request('GET',    '/api/settings'),
   patchSettings:(body)        => request('PATCH',  '/api/settings', body),
 
