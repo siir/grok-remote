@@ -209,6 +209,21 @@ const GROUP_CHILD_ROW = 42;
 // Per-grouped-tool-child row height when the child itself is also expanded.
 const GROUP_CHILD_ROW_OPEN = 280;
 
+// Milestone strip layout. Time-axis scaling was replaced by index-based
+// placement (see flow layout pass). A milestone card is ~200px wide; the
+// step gives breathing room without pushing far-future events offscreen.
+// The 2-row y-stagger handles bursts where 3+ events land in <1s.
+const MILESTONE_STEP_X = 150;
+const MILESTONE_ROW_DY = 28;
+
+// Backoff schedule for sub-agent child trace retries. Used when the session
+// dir hasn't been flushed to disk yet (brand-new bg sub-agents). The
+// fetchSubChildren machinery retries on this schedule up to MAX_RETRIES,
+// then ticks every LIVE_RETRY_MS for as long as the sub-agent is still
+// running. Once it ends, we do the final retries and give up.
+const SUB_CHILD_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 32000];
+const SUB_CHILD_LIVE_RETRY_MS   = 5000;
+
 function nodeKind(typeName, isOpen) {
   const h = NODE_HEIGHTS[typeName] || NODE_HEIGHTS.tool;
   return isOpen ? h.open : h.closed;
@@ -606,6 +621,9 @@ function layoutAgents(agents) {
       name:    a.name || a.id.slice(0, 8),
       model:   a.model || '',
       status:  a.status || 'idle',
+      // cwd lets the sub-agent direct-updates endpoint look up the child's
+      // session dir without scanning. Required for the fast-path retry loop.
+      cwd:     a.cwd || '',
       tokens:  0,
       inFlight: 0,
     },
@@ -1010,6 +1028,16 @@ function FlowInner({ filterIds = null }) {
   // request from being kicked off while the first hasn't resolved (e.g.
   // user rapidly toggling the same sub-agent open/closed/open).
   const subChildInFlightRef = useRef(new Set());
+  // Per-key retry state for sub-agent child fetches. We use staged backoff
+  // when the session dir hasn't been flushed yet, then once the sub-agent
+  // is marked done we do the final retries and stop.
+  //   key -> { attempts, sessionId, cwd, timer, stopped }
+  const subChildRetryRef = useRef(new Map());
+  // Latest agentState mirror so polling retry callbacks can decide whether
+  // the sub-agent is still running (keep retrying every 5s) or done (a few
+  // final retries then give up).
+  const agentStateRef = useRef({});
+  useEffect(() => { agentStateRef.current = agentState; }, [agentState]);
 
   // Keep latest values reachable inside polling closures without retriggering.
   const showArchivedRef = useRef(showArchived);
@@ -1290,40 +1318,164 @@ function FlowInner({ filterIds = null }) {
     });
   }, [fitView]);
 
-  // Kick off a child-trace fetch for one sub-agent. Idempotent: skips if a
-  // request is already in flight or the entry is already loaded. Pure side
-  // effect (writes to subagentChildren + subChildInFlightRef).
-  const fetchSubChildren = useCallback((key, sessionId) => {
+  // Kick off a child-trace fetch for one sub-agent. Tries the fast direct
+  // updates.jsonl endpoint first, falls back to grok-trace, and retries on
+  // a staged backoff if both fail (likely cause: session dir hasn't been
+  // flushed to disk yet, common for brand-new bg sub-agents).
+  //
+  // While the sub-agent is still running we keep retrying every
+  // SUB_CHILD_LIVE_RETRY_MS ms forever. Once it ends we do up to
+  // SUB_CHILD_RETRY_DELAYS_MS.length attempts on backoff, then give up.
+  //
+  // key: `${agentId}:${subId}` (also matches the layout pass's childKey).
+  // sessionId: the sub-agent's grok session id (UUID).
+  // cwd: the parent agent's cwd; threaded so the direct endpoint can find
+  //      the session dir without scanning.
+  const fetchSubChildren = useCallback((key, sessionId, cwd) => {
     if (!sessionId) return;
     if (subChildInFlightRef.current.has(key)) return;
+
+    // Tracks per-key retry state. Created on first call, mutated in place
+    // so timers can read live values without re-running the effect.
+    let st = subChildRetryRef.current.get(key);
+    if (!st) {
+      st = { attempts: 0, sessionId, cwd: cwd || '', timer: null, stopped: false };
+      subChildRetryRef.current.set(key, st);
+    } else {
+      st.sessionId = sessionId;
+      if (cwd) st.cwd = cwd;
+      st.stopped = false;
+    }
+
     setSubagentChildren((prev) => {
       const existing = prev[key];
-      if (existing && (existing.status === 'loaded' || existing.status === 'loading')) {
+      if (existing && existing.status === 'loaded' && existing.calls.length > 0) {
         return prev;
       }
       return { ...prev, [key]: { status: 'loading', calls: [], sessionId } };
     });
     subChildInFlightRef.current.add(key);
-    api.subagents.trace(sessionId).then((data) => {
+
+    // Direct-first fetch. Returns { calls, source } on success or throws.
+    const fetchOnce = async () => {
+      // 1. Direct read of updates.jsonl. Cheap; works while live.
+      try {
+        const direct = await api.subagents.updates(sessionId, st.cwd);
+        if (direct && Array.isArray(direct.updates)) {
+          const calls = extractChildCallsFromTrace({ updates: direct.updates });
+          if (calls.length > 0) return { calls, source: 'direct' };
+          // Empty: keep going to the trace fallback, then to retries.
+        }
+      } catch { /* fall through */ }
+      // 2. Trace fallback. Slower but is the only path that works once the
+      //    session dir has been compacted / cleaned up.
+      const data = await api.subagents.trace(sessionId);
       const calls = extractChildCallsFromTrace(data);
-      setSubagentChildren((prev) => ({
-        ...prev,
-        [key]: { status: 'loaded', calls, sessionId, fetchedAt: Date.now() },
-      }));
-    }).catch((err) => {
+      return { calls, source: 'trace' };
+    };
+
+    const isStillRunning = () => {
+      const [agentId, subId] = key.split(':');
+      const slot = agentStateRef.current[agentId];
+      if (!slot || !Array.isArray(slot.subAgents)) return false;
+      const sub = slot.subAgents.find(s => s.id === subId);
+      if (!sub) return false;
+      const status = String(sub.status || '').toLowerCase();
+      return !sub.endedAt && (status === 'pending' || status === 'running' || status === 'in_progress');
+    };
+
+    const scheduleRetry = (errMsg) => {
+      st.attempts += 1;
+      // While the sub is live, retry forever on the live cadence.
+      // Once it ends, retry on staged backoff, then give up.
+      const live = isStillRunning();
+      let delay;
+      if (live) {
+        delay = SUB_CHILD_LIVE_RETRY_MS;
+      } else if (st.attempts <= SUB_CHILD_RETRY_DELAYS_MS.length) {
+        delay = SUB_CHILD_RETRY_DELAYS_MS[st.attempts - 1];
+      } else {
+        // Gave up. Surface the error.
+        setSubagentChildren((prev) => ({
+          ...prev,
+          [key]: {
+            status: 'error',
+            calls: (prev[key] && prev[key].calls) || [],
+            sessionId,
+            error: errMsg || 'fetch failed',
+            fetchedAt: Date.now(),
+          },
+        }));
+        st.stopped = true;
+        return;
+      }
+      // Keep the spinner up so the user sees we're still working.
       setSubagentChildren((prev) => ({
         ...prev,
         [key]: {
-          status: 'error',
-          calls: [],
+          status: 'loading',
+          calls: (prev[key] && prev[key].calls) || [],
           sessionId,
-          error: (err && err.message) || 'fetch failed',
-          fetchedAt: Date.now(),
+          retryAttempt: st.attempts,
+          retryReason: errMsg || null,
         },
       }));
-    }).finally(() => {
-      subChildInFlightRef.current.delete(key);
-    });
+      if (st.timer) clearTimeout(st.timer);
+      st.timer = setTimeout(() => {
+        st.timer = null;
+        if (st.stopped) return;
+        if (subChildInFlightRef.current.has(key)) return;
+        subChildInFlightRef.current.add(key);
+        run();
+      }, delay);
+    };
+
+    const run = () => {
+      fetchOnce().then(({ calls, source }) => {
+        if (calls.length === 0) {
+          // Nothing yet. If the sub is still running, retry; otherwise the
+          // child genuinely had zero tool calls, which is a valid loaded
+          // state.
+          if (isStillRunning()) {
+            subChildInFlightRef.current.delete(key);
+            scheduleRetry('no events yet');
+            return;
+          }
+          setSubagentChildren((prev) => ({
+            ...prev,
+            [key]: { status: 'loaded', calls: [], sessionId, fetchedAt: Date.now(), source },
+          }));
+          st.stopped = true;
+          subChildInFlightRef.current.delete(key);
+          return;
+        }
+        setSubagentChildren((prev) => ({
+          ...prev,
+          [key]: { status: 'loaded', calls, sessionId, fetchedAt: Date.now(), source },
+        }));
+        st.attempts = 0;
+        st.stopped = true;
+        subChildInFlightRef.current.delete(key);
+      }).catch((err) => {
+        const msg = (err && err.message) || 'fetch failed';
+        subChildInFlightRef.current.delete(key);
+        scheduleRetry(msg);
+      });
+    };
+
+    run();
+  }, []);
+
+  // Clean up any pending retry timers on unmount so we don't leak intervals.
+  useEffect(() => {
+    const map = subChildRetryRef.current;
+    return () => {
+      for (const st of map.values()) {
+        if (st.timer) clearTimeout(st.timer);
+        st.stopped = true;
+      }
+      map.clear();
+    };
   }, []);
 
   // Lifted "open/closed" toggle for the rest of the expandable node types
@@ -1340,10 +1492,10 @@ function FlowInner({ filterIds = null }) {
       else next.add(nodeId);
       return next;
     });
-    // ctx: { kind: 'subAgent', childKey, sessionId } -- if present and we
-    // just opened the node, lazy-load the child trace.
+    // ctx: { kind: 'subAgent', childKey, sessionId, cwd } -- if present and
+    // we just opened the node, lazy-load the child trace.
     if (!wasOpen && ctx && ctx.kind === 'subAgent' && ctx.childKey && ctx.sessionId) {
-      fetchSubChildren(ctx.childKey, ctx.sessionId);
+      fetchSubChildren(ctx.childKey, ctx.sessionId, ctx.cwd || '');
     }
     if (expandFitTimerRef.current) cancelAnimationFrame(expandFitTimerRef.current);
     expandFitTimerRef.current = requestAnimationFrame(() => {
@@ -1462,6 +1614,7 @@ function FlowInner({ filterIds = null }) {
                   kind: 'subAgent',
                   childKey,
                   sessionId: childSessionId,
+                  cwd: agentNode.data.cwd || '',
                 }),
               },
             });
@@ -1726,23 +1879,29 @@ function FlowInner({ filterIds = null }) {
         // In scoped mode we show a single strip at canvas top. In global mode
         // each agent's strip sits just above its row so multiple conversations
         // don't fight for the same X scale.
+        //
+        // We used to scale x by timestamp, but that wedged closely-spaced
+        // events on top of each other and shoved the latest event to the
+        // far-right edge regardless of how isolated it was. Now we just sort
+        // chronologically and place left-to-right with a fixed step, plus a
+        // 2-row y-stagger so neighbours never collide.
         if (Array.isArray(st.milestones) && st.milestones.length) {
-          const ms = st.milestones;
-          const tMin = ms[0].t;
-          const tMax = ms[ms.length - 1].t;
-          const W = 760;
-          const strip = ms.slice(-MILESTONE_CAP);
+          const strip = st.milestones
+            .slice(-MILESTONE_CAP)
+            .slice()
+            .sort((a, b) => (a.t || 0) - (b.t || 0));
+          const MS_STEP_X   = MILESTONE_STEP_X;
+          const MS_ROW_DY   = MILESTONE_ROW_DY;
+          const stripBaseY  = agents.length === 1
+            ? 8
+            : (agentNode.position.y - 56);
           strip.forEach((m, j) => {
-            const stripY = agents.length === 1
-              ? 8
-              : (agentNode.position.y - 56);
-            const span = Math.max(1, tMax - tMin);
-            const fx = strip.length === 1 ? 0 : ((m.t - tMin) / span) * W;
-            const x = 0 + fx;
+            const x = j * MS_STEP_X;
+            const y = stripBaseY + ((j % 2) * MS_ROW_DY);
             auxNodes.push({
               id: `ms:${agentNode.data.agentId}:${j}:${m.t}:${m.kind}`,
               type: 'milestone',
-              position: { x, y: stripY },
+              position: { x, y },
               draggable: false,
               selectable: false,
               data: m,

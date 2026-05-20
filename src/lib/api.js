@@ -98,6 +98,14 @@ export const api = {
   // and returns the same shape as api.trace(agentId).
   subagents: {
     trace: (sessionId) => request('GET', `/api/subagents/${encodeURIComponent(sessionId)}/trace`),
+    // Fast direct read of the child session's updates.jsonl. Skips the
+    // grok-trace shell-out + archive extraction so it succeeds while the
+    // session dir is still being written. cwd is the parent agent's cwd
+    // (sub-agents share the parent's cwd-keyed sessions root).
+    updates: (sessionId, cwd) => {
+      const qs = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+      return request('GET', `/api/subagents/${encodeURIComponent(sessionId)}/updates${qs}`);
+    },
   },
 
   getSettings:  ()            => request('GET',    '/api/settings'),

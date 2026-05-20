@@ -5453,8 +5453,22 @@ body::before {
   background: var(--panel-2);
   fill: var(--teal);
 }
-.flow-canvas .react-flow__node {
+/* React Flow paints its own grey container around every node. We let each
+   custom node renderer paint its own backdrop instead, so the wrapper must
+   stay invisible (otherwise group / sub-agent / tool cards get a fugly grey
+   halo around them, especially noticeable on group cards). */
+.flow-canvas .react-flow__node,
+.flow-canvas .react-flow__node.selected,
+.flow-canvas .react-flow__node:focus,
+.flow-canvas .react-flow__node:focus-visible,
+.flow-canvas .react-flow__node-group,
+.flow-canvas .react-flow__node-group.selected {
   font-family: var(--mono);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  outline: none;
 }
 .flow-canvas .react-flow__node.flow-node--focus {
   filter: drop-shadow(0 0 6px rgba(94, 234, 212, 0.55));

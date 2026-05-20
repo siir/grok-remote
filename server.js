@@ -205,6 +205,86 @@ async function handleApi(req, res, url, method) {
     }
   }
 
+  // GET /api/subagents/:sessionId/updates?cwd=<absolute-cwd>
+  //
+  // Fast path for sub-agent child events. Skips `grok trace` (which builds a
+  // tar.gz, extracts it, and is rate-limited by the CLI startup) and reads
+  // ~/.grok/sessions/<url-encoded cwd>/<sessionId>/updates.jsonl directly.
+  // Works while the session is still being written, which the trace
+  // endpoint does not. Returns the same shape extractChildCallsFromTrace
+  // consumes: { sessionId, updates: [...] }.
+  //
+  // When cwd is omitted we fall back to a one-level scan of every
+  // ~/.grok/sessions/<cwd>/ subdir for one named <sessionId>. The frontend
+  // always passes cwd so the scan is only a safety net.
+  {
+    const sm = url.match(/^\/api\/subagents\/([^\/]+)\/updates(?:\?.*)?$/);
+    if (sm && method === 'GET') {
+      const sid = sm[1];
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!UUID_RE.test(sid)) {
+        return sendJson(res, 400, { ok: false, error: 'invalid sessionId' });
+      }
+      const qs   = new URL(req.url, 'http://x').searchParams;
+      const cwd  = qs.get('cwd') || '';
+      const root = path.join(os.homedir(), '.grok', 'sessions');
+
+      function tryReadUpdates(sessionDir) {
+        const p = path.join(sessionDir, 'updates.jsonl');
+        if (!fs.existsSync(p)) return null;
+        let raw;
+        try { raw = fs.readFileSync(p, 'utf8'); }
+        catch { return null; }
+        const out = [];
+        for (const line of raw.split('\n')) {
+          const t = line.trim();
+          if (!t) continue;
+          try { out.push(JSON.parse(t)); } catch { /* skip malformed */ }
+        }
+        return out;
+      }
+
+      let updates = null;
+      let sourceDir = null;
+
+      if (cwd) {
+        // Direct lookup using the encoded cwd path grok itself uses.
+        const dir = path.join(root, encodeURIComponent(cwd), sid);
+        updates = tryReadUpdates(dir);
+        if (updates) sourceDir = dir;
+      }
+      if (!updates) {
+        // Fallback scan. Only one level deep so this stays cheap.
+        try {
+          const cwds = fs.readdirSync(root);
+          for (const enc of cwds) {
+            const dir = path.join(root, enc, sid);
+            const got = tryReadUpdates(dir);
+            if (got) { updates = got; sourceDir = dir; break; }
+          }
+        } catch { /* root may not exist yet */ }
+      }
+
+      if (!updates) {
+        return sendJson(res, 404, {
+          ok: false, error: 'session dir not flushed yet', sessionId: sid,
+        });
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        ok: true,
+        sessionId: sid,
+        source: 'direct',
+        sourceDir,
+        updates,
+      }));
+      return;
+    }
+  }
+
   if (url === '/api/agents' && method === 'POST') {
     try {
       const body = await readJsonBody(req) || {};
