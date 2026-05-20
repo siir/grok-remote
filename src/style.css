@@ -109,9 +109,10 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 22px;
+  padding: 12px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
+  gap: 8px;
 }
 .brand {
   display: flex;
@@ -3869,30 +3870,10 @@ body::before {
   position: relative;
 }
 
-/* Topbar panel toggle buttons. Pinned to the extreme corners of the
-   topbar (top-left for the conversations sidebar, top-right for the
-   tools panel). Icon-only, no border, no background. */
-.topbar-panel-btn {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  padding: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  line-height: 1;
-  z-index: 3;
-  transition: color 0.15s, transform 0.1s;
-}
-.topbar-panel-btn--left  { left: 8px; }
-.topbar-panel-btn--right { right: 8px; }
-
-/* Topbar icon-only buttons (settings gear, future siblings). Borderless,
-   icon swaps in via JS at boot. */
+/* Topbar panel + icon buttons. Live as flex children of the topbar so
+   they sit cleanly in the corners without overlapping the brand or the
+   right-side group. Icon-only, borderless. */
+.topbar-panel-btn,
 .topbar-icon-btn {
   background: transparent;
   border: none;
@@ -3905,22 +3886,15 @@ body::before {
   line-height: 1;
   transition: color 0.15s, transform 0.1s;
 }
+.topbar-panel-btn svg,
 .topbar-icon-btn svg {
   width: 18px;
   height: 18px;
 }
+.topbar-panel-btn:hover,
 .topbar-icon-btn:hover { color: var(--teal); }
+.topbar-panel-btn:active,
 .topbar-icon-btn:active { transform: scale(0.92); }
-.topbar-panel-btn svg {
-  width: 18px;
-  height: 18px;
-}
-.topbar-panel-btn:hover {
-  color: var(--teal);
-}
-.topbar-panel-btn:active {
-  transform: translateY(-50%) scale(0.92);
-}
 @media (max-width: 720px) {
   .topbar-panel-btn { display: none !important; }
 }
