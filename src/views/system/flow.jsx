@@ -50,6 +50,8 @@ function normaliseStatus(s) {
 
 function AgentNode({ data }) {
   const status = normaliseStatus(data.status);
+  const hist = Array.isArray(data.tokensHistory) ? data.tokensHistory : [];
+  const sparkPath = (hist.length >= 2) ? buildSparkPath(hist, 120, 16) : null;
   return (
     <div className={`flow-agent-node flow-agent-node--${status}`}>
       <Handle type="source" position={Position.Right} className="flow-handle" />
@@ -70,8 +72,36 @@ function AgentNode({ data }) {
           <span className="flow-agent-node__inflight">{data.inFlight} tool{data.inFlight === 1 ? '' : 's'}</span>
         ) : null}
       </div>
+      {sparkPath && (
+        <svg
+          className="flow-agent-node__spark"
+          viewBox="0 0 120 16"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <path d={sparkPath.area} fill="rgba(94, 234, 212, 0.15)" />
+          <path d={sparkPath.line} fill="none" stroke="var(--teal)" strokeWidth="1.2" />
+        </svg>
+      )}
     </div>
   );
+}
+
+function buildSparkPath(history, W, H) {
+  const n = history.length;
+  const vMin = Math.min(...history.map(p => p.v));
+  const vMax = Math.max(...history.map(p => p.v));
+  const range = Math.max(1, vMax - vMin);
+  const xs = (i) => (n === 1 ? 0 : (i / (n - 1)) * W);
+  const ys = (v) => H - 1 - ((v - vMin) / range) * (H - 2);
+  let d = '';
+  for (let i = 0; i < n; i++) {
+    const x = xs(i).toFixed(2);
+    const y = ys(history[i].v).toFixed(2);
+    d += (i === 0 ? 'M' : 'L') + ' ' + x + ' ' + y + ' ';
+  }
+  const area = d + ` L ${W} ${H} L 0 ${H} Z`;
+  return { line: d.trim(), area };
 }
 
 function ToolNode({ data }) {
@@ -147,7 +177,7 @@ function FlowInner({ filterIds = null }) {
 
   const patchAgent = useCallback((id, patch) => {
     setAgentState((prev) => {
-      const cur = prev[id] || { status: 'idle', tokens: 0, inFlight: 0, calls: {} };
+      const cur = prev[id] || { status: 'idle', tokens: 0, inFlight: 0, calls: {}, tokensHistory: [] };
       const next = typeof patch === 'function' ? patch(cur) : { ...cur, ...patch };
       return { ...prev, [id]: next };
     });
@@ -173,7 +203,14 @@ function FlowInner({ filterIds = null }) {
     const bumpTokens = (data) => {
       const t = data && data._meta && Number(data._meta.totalTokens);
       if (Number.isFinite(t) && t > 0) {
-        patchAgent(agent.id, (cur) => ({ ...cur, tokens: Math.max(cur.tokens, t) }));
+        patchAgent(agent.id, (cur) => {
+          if (t <= cur.tokens) return cur; // monotone; skip duplicates
+          const hist = Array.isArray(cur.tokensHistory) ? cur.tokensHistory.slice() : [];
+          hist.push({ t: Date.now(), v: t });
+          // Cap to 30 samples to keep memory bounded.
+          if (hist.length > 30) hist.splice(0, hist.length - 30);
+          return { ...cur, tokens: t, tokensHistory: hist };
+        });
       }
     };
 
@@ -371,6 +408,7 @@ function FlowInner({ filterIds = null }) {
           status:   normaliseStatus(st.status || n.data.status),
           tokens:   st.tokens || 0,
           inFlight: st.inFlight || 0,
+          tokensHistory: Array.isArray(st.tokensHistory) ? st.tokensHistory : [],
           isFocus,
         },
       };
@@ -428,6 +466,22 @@ function FlowInner({ filterIds = null }) {
   const handleFit = useCallback(() => {
     try { fitView({ padding: 0.2, duration: 250 }); } catch { /* ignore */ }
   }, [fitView]);
+
+  // Auto-fit whenever the visible agent set changes (spawn, archive,
+  // disconnect filter, show-all toggle). Skip while the user is mid-
+  // interaction by deferring to a microtask after layout.
+  const prevAgentIdsRef = useRef('');
+  useEffect(() => {
+    const sig = agents.map(a => a.id).sort().join(',');
+    if (sig === prevAgentIdsRef.current) return;
+    prevAgentIdsRef.current = sig;
+    if (!agents.length) return;
+    // requestAnimationFrame so React has actually committed the new nodes.
+    const raf = requestAnimationFrame(() => {
+      try { fitView({ padding: 0.2, duration: 250 }); } catch { /* ignore */ }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [agents, fitView]);
 
   // ── render ─────────────────────────────────────────────────────────────
 

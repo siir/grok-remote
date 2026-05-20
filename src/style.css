@@ -4339,6 +4339,13 @@ body::before {
   color: var(--teal);
   font-size: 10px;
 }
+.flow-agent-node__spark {
+  display: block;
+  width: 100%;
+  height: 16px;
+  margin-top: 4px;
+  opacity: 0.85;
+}
 
 /* Tool-call satellite node. */
 .flow-tool-node {
