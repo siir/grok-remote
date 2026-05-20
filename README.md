@@ -16,6 +16,8 @@ One command sets it up. PM2 keeps the server alive. Tailscale handles the networ
 
 > Not affiliated with xAI, grok, or Tailscale.
 
+> **Work in progress.** I'm pushing every change as I make it. Expect minor options to be broken at any given moment. Core agent features (spawn, chat, tool calls, bg processes, history) are functional.
+
 ---
 
 ## What it does
