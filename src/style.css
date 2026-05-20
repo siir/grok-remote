@@ -582,6 +582,28 @@ body::before {
   color: var(--teal);
   font-variant-numeric: tabular-nums;
 }
+.agent-inflight {
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.agent-inflight-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: agent-inflight-pulse 1.2s ease-in-out infinite;
+}
+@keyframes agent-inflight-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1);    }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-inflight-dot { animation: none; opacity: 1; }
+}
 .tab-tokens {
   color: var(--teal);
   font-family: var(--mono);

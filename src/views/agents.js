@@ -235,6 +235,18 @@ export class AgentsSidebar {
           document.dispatchEvent(new CustomEvent('grok-remote:agents-refresh', { detail: this.agents }));
         } catch { /* ignore */ }
       });
+      // inFlight tool-call count: same in-place patch pattern.
+      es.addEventListener('agent_inflight', (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          if (!d || !d.id || typeof d.inFlight !== 'number') return;
+          const idx = this.agents.findIndex(a => a && a.id === d.id);
+          if (idx < 0) return;
+          this.agents[idx] = { ...this.agents[idx], inFlight: d.inFlight };
+          this.renderList();
+          document.dispatchEvent(new CustomEvent('grok-remote:agents-refresh', { detail: this.agents }));
+        } catch { /* ignore */ }
+      });
       es.addEventListener('error', () => { this._sseAlive = false; });
       apply();
     } catch {
@@ -456,6 +468,12 @@ export class AgentsSidebar {
         el('span', { class: 'agent-model' }, a.model || '·'),
         el('span', { class: 'agent-sep' }, '·'),
         el('span', { class: `agent-status agent-status--${status}` }, STATUS_LABEL[status] || status),
+        (typeof a.inFlight === 'number' && a.inFlight > 0) ? el('span', { class: 'agent-sep' }, '·') : null,
+        (typeof a.inFlight === 'number' && a.inFlight > 0)
+          ? el('span', { class: 'agent-inflight', title: `${a.inFlight} tool call${a.inFlight === 1 ? '' : 's'} in flight` },
+              el('span', { class: 'agent-inflight-dot' }),
+              `${a.inFlight} tool${a.inFlight === 1 ? '' : 's'}`)
+          : null,
         (typeof a.totalTokens === 'number' && a.totalTokens > 0) ? el('span', { class: 'agent-sep' }, '·') : null,
         (typeof a.totalTokens === 'number' && a.totalTokens > 0)
           ? el('span', { class: 'agent-tokens', title: `${a.totalTokens.toLocaleString()} tokens in context` }, fmtTokens(a.totalTokens))
