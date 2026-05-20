@@ -25,6 +25,7 @@ import {
   ReactFlowProvider,
   Background,
   Controls,
+  MiniMap,
   Handle,
   Position,
   useReactFlow,
@@ -35,6 +36,7 @@ import dagre from 'dagre';
 import { api } from '../../lib/api.js';
 import { fmtTokens } from '../../lib/format.js';
 import { iconHtml } from '../../lib/icons.js';
+import { FloatingEdge } from './flow-floating-edge.jsx';
 
 // How often we re-poll the agent list. SSE keeps individual cards live; this
 // is only here to pick up newly-spawned or deleted agents.
@@ -248,6 +250,17 @@ const DEFAULT_FLOW_SETTINGS = Object.freeze({
   autoFitOnExpand:   true,
   edgeAnimations:    true,
   animationDuration: 250,
+  // Advanced (gear panel, new in this patch)
+  autoExpandNewNodes: false,           // auto-open tool/sub-agent/bg nodes that ARRIVE after initial mount
+  edgeType:           'floating',      // floating | bezier | smoothstep | step | straight
+  backgroundPattern:  'dots',          // dots | lines | cross | none
+  backgroundGap:      24,              // <Background gap={N}>
+  showControls:       true,            // React Flow zoom-in/out/fit buttons
+  showMinimap:        false,           // React Flow MiniMap overlay
+  connectionMode:     'loose',         // loose | strict (React Flow connectionMode)
+  fitViewPadding:     0.15,            // padding applied to all fitView() calls
+  maxZoom:            2,                // ReactFlow maxZoom prop
+  minZoom:            0.3,              // ReactFlow minZoom prop
 });
 
 function loadFlowSettings() {
@@ -644,6 +657,15 @@ const NODE_TYPES = {
   bgTask: BgTaskNode,
   milestone: MilestoneNode,
   subAgent: SubAgentNode,
+};
+
+// Custom edge registry. The 'floating' type is the new default: it anchors
+// each edge endpoint to the closest point on each node's bounding rect (see
+// flow-floating-edge.js). React Flow's built-in 'bezier', 'smoothstep',
+// 'step', 'straight' types are registered automatically by ReactFlow so we
+// don't need to list them here; only our custom type lives in this map.
+const EDGE_TYPES = {
+  floating: FloatingEdge,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -1470,7 +1492,7 @@ function FlowInner({ filterIds = null }) {
     expandFitTimerRef.current = requestAnimationFrame(() => {
       const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
       if (!s.autoFitOnExpand) return;
-      try { fitView({ padding: 0.15, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
+      try { fitView({ padding: (Number.isFinite(s.fitViewPadding) ? s.fitViewPadding : 0.15), duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
     });
   }, [fitView]);
 
@@ -1657,7 +1679,7 @@ function FlowInner({ filterIds = null }) {
     expandFitTimerRef.current = requestAnimationFrame(() => {
       const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
       if (!s.autoFitOnExpand) return;
-      try { fitView({ padding: 0.15, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
+      try { fitView({ padding: (Number.isFinite(s.fitViewPadding) ? s.fitViewPadding : 0.15), duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
     });
   }, [fitView, fetchSubChildren]);
 
@@ -1675,7 +1697,7 @@ function FlowInner({ filterIds = null }) {
     if (expandFitTimerRef.current) cancelAnimationFrame(expandFitTimerRef.current);
     expandFitTimerRef.current = requestAnimationFrame(() => {
       const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
-      try { fitView({ padding: 0.2, duration: s.animationDuration ?? 300 }); } catch { /* ignore */ }
+      try { fitView({ padding: (Number.isFinite(s.fitViewPadding) ? s.fitViewPadding : 0.2), duration: s.animationDuration ?? 300 }); } catch { /* ignore */ }
     });
   }, [fitView]);
 
@@ -2141,20 +2163,82 @@ function FlowInner({ filterIds = null }) {
 
     // Prune any edges whose endpoints no longer exist (e.g. user toggled
     // off "show bg-task nodes" so the bg-target edge is now orphaned). Also
-    // strip the dashed animation when the setting is off.
+    // strip the dashed animation when the setting is off, and stamp every
+    // edge with the user-selected `type` so the FloatingEdge (or built-in
+    // bezier / smoothstep / step / straight) renderer takes over.
+    //
+    // For the floating renderer we also copy the stroke colour into a
+    // `data.color` field so the custom edge component can pick it up
+    // without dipping into `style`. The original `style` object is kept
+    // intact so the built-in renderers (which respect it directly) still
+    // pick up the dim/teal/red/blue colours.
     const nodeIds = new Set(allNodes.map(n => n.id));
+    const edgeType = settings.edgeType || 'floating';
     const finalEdges = [];
     for (const e of auxEdges) {
       if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-      if (settings.edgeAnimations) {
-        finalEdges.push(e);
-      } else {
-        finalEdges.push({ ...e, animated: false });
-      }
+      const stroke = (e.style && e.style.stroke) || 'var(--teal)';
+      const data = {
+        ...(e.data || {}),
+        color:           stroke,
+        strokeWidth:     (e.style && e.style.strokeWidth) || 1.2,
+        strokeDasharray: (e.style && e.style.strokeDasharray) || undefined,
+      };
+      const next = {
+        ...e,
+        type: edgeType,
+        data,
+        animated: settings.edgeAnimations ? e.animated : false,
+      };
+      finalEdges.push(next);
     }
 
     return { nodes: allNodes, edges: finalEdges };
   }, [agents, agentState, hasFilter, showAll, filterIds, expandedGroups, expandedNodes, userPositions, toggleGroup, toggleNode, tick, subagentChildren, settings]);
+
+  // Auto-expand newly-arrived nodes.
+  //
+  // When `settings.autoExpandNewNodes` is on, any node id that ARRIVES after
+  // the canvas has finished its first render gets added to `expandedNodes`
+  // so the user sees it pre-opened. We deliberately skip the initial
+  // mount's batch -- otherwise the very first render of a session with
+  // hundreds of historical nodes would chaotically pop every one open.
+  //
+  // Strategy: stash every node id we've ever seen in a ref. On the first
+  // useMemo pass we just seed the ref. On every later pass we diff the
+  // current node ids against the ref. New ids that look expandable
+  // (tool / subAgent / bg / subtool) get folded into expandedNodes via a
+  // setExpandedNodes call. The ref then absorbs the new ids so we won't
+  // re-expand them if the user manually collapses one later.
+  const seenNodeIdsRef = useRef(null);
+  useEffect(() => {
+    if (!settings.autoExpandNewNodes) {
+      // When the toggle flips off, drop the snapshot so re-enabling it
+      // later doesn't suddenly auto-expand every historical node.
+      seenNodeIdsRef.current = null;
+      return;
+    }
+    const expandable = nodes
+      .filter((n) => n.type === 'tool' || n.type === 'subAgent' || n.type === 'bgTask')
+      .map((n) => n.id);
+    if (seenNodeIdsRef.current === null) {
+      // Initial seed -- mark every currently-visible expandable node as
+      // already-seen so we don't auto-open the historical batch.
+      seenNodeIdsRef.current = new Set(expandable);
+      return;
+    }
+    const seen = seenNodeIdsRef.current;
+    const fresh = [];
+    for (const id of expandable) {
+      if (!seen.has(id)) { fresh.push(id); seen.add(id); }
+    }
+    if (fresh.length === 0) return;
+    setExpandedNodes((prev) => {
+      const next = new Set(prev);
+      for (const id of fresh) next.add(id);
+      return next;
+    });
+  }, [nodes, settings.autoExpandNewNodes]);
 
   // ── handlers ───────────────────────────────────────────────────────────
 
@@ -2169,7 +2253,7 @@ function FlowInner({ filterIds = null }) {
 
   const handleFit = useCallback(() => {
     const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
-    try { fitView({ padding: 0.2, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
+    try { fitView({ padding: (Number.isFinite(s.fitViewPadding) ? s.fitViewPadding : 0.2), duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
   }, [fitView]);
 
   // Auto-fit whenever the visible agent set changes (spawn, archive,
@@ -2183,7 +2267,7 @@ function FlowInner({ filterIds = null }) {
     if (!agents.length) return;
     const raf = requestAnimationFrame(() => {
       const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
-      try { fitView({ padding: 0.2, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
+      try { fitView({ padding: (Number.isFinite(s.fitViewPadding) ? s.fitViewPadding : 0.2), duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
     });
     return () => cancelAnimationFrame(raf);
   }, [agents, fitView]);
@@ -2254,6 +2338,7 @@ function FlowInner({ filterIds = null }) {
               nodes={nodes}
               edges={edges}
               nodeTypes={NODE_TYPES}
+              edgeTypes={EDGE_TYPES}
               onNodeClick={onNodeClick}
               onNodeDragStop={onNodeDragStop}
               nodesDraggable={settings.nodesDraggable !== false}
@@ -2265,13 +2350,29 @@ function FlowInner({ filterIds = null }) {
                 Number.isFinite(settings.snapGridSize) ? settings.snapGridSize : 15,
                 Number.isFinite(settings.snapGridSize) ? settings.snapGridSize : 15,
               ]}
+              connectionMode={settings.connectionMode === 'strict' ? 'strict' : 'loose'}
               fitView
+              fitViewOptions={{
+                padding: Number.isFinite(settings.fitViewPadding) ? settings.fitViewPadding : 0.15,
+              }}
               proOptions={{ hideAttribution: true }}
-              minZoom={0.3}
-              maxZoom={1.5}
+              minZoom={Number.isFinite(settings.minZoom) ? settings.minZoom : 0.3}
+              maxZoom={Number.isFinite(settings.maxZoom) ? settings.maxZoom : 2}
             >
-              <Background gap={24} size={1} color="var(--border)" />
-              <Controls showInteractive={false} />
+              {settings.backgroundPattern !== 'none' && (
+                <Background
+                  variant={settings.backgroundPattern || 'dots'}
+                  gap={Number.isFinite(settings.backgroundGap) ? settings.backgroundGap : 24}
+                  size={1}
+                  color="var(--border)"
+                />
+              )}
+              {settings.showControls !== false && (
+                <Controls showInteractive={false} />
+              )}
+              {!!settings.showMinimap && (
+                <MiniMap pannable zoomable />
+              )}
             </ReactFlow>
             <FlowTotalsOverlay agents={agents} agentState={agentState} />
             {statsOpen && (
@@ -2880,6 +2981,97 @@ function FlowSettingsPanel({
             value={settings.animationDuration}
             onChange={(v) => onChange({ animationDuration: v })}
             suffix="ms"
+          />
+        </section>
+
+        <section className="flow-settings__section">
+          <div className="flow-settings__section-title">Advanced</div>
+          <ToggleRow
+            label="Auto-expand new nodes"
+            checked={!!settings.autoExpandNewNodes}
+            onChange={(v) => onChange({ autoExpandNewNodes: v })}
+          />
+          <div className="flow-settings__row">
+            <label className="flow-settings__label" htmlFor="flow-set-edge-type">Edge type</label>
+            <select
+              id="flow-set-edge-type"
+              className="flow-settings__select"
+              value={settings.edgeType || 'floating'}
+              onChange={(e) => onChange({ edgeType: e.target.value })}
+            >
+              <option value="floating">floating (closest)</option>
+              <option value="bezier">bezier</option>
+              <option value="smoothstep">smoothstep</option>
+              <option value="step">step</option>
+              <option value="straight">straight</option>
+            </select>
+          </div>
+          <div className="flow-settings__row">
+            <label className="flow-settings__label" htmlFor="flow-set-bg-pattern">Background pattern</label>
+            <select
+              id="flow-set-bg-pattern"
+              className="flow-settings__select"
+              value={settings.backgroundPattern || 'dots'}
+              onChange={(e) => onChange({ backgroundPattern: e.target.value })}
+            >
+              <option value="dots">dots</option>
+              <option value="lines">lines</option>
+              <option value="cross">cross</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+          <SliderRow
+            id="flow-set-bg-gap"
+            label="Background gap"
+            min={10} max={50} step={1}
+            value={settings.backgroundGap}
+            onChange={(v) => onChange({ backgroundGap: v })}
+            suffix="px"
+          />
+          <ToggleRow
+            label="Show controls"
+            checked={settings.showControls !== false}
+            onChange={(v) => onChange({ showControls: v })}
+          />
+          <ToggleRow
+            label="Show minimap"
+            checked={!!settings.showMinimap}
+            onChange={(v) => onChange({ showMinimap: v })}
+          />
+          <div className="flow-settings__row">
+            <label className="flow-settings__label" htmlFor="flow-set-conn-mode">Connection mode</label>
+            <select
+              id="flow-set-conn-mode"
+              className="flow-settings__select"
+              value={settings.connectionMode || 'loose'}
+              onChange={(e) => onChange({ connectionMode: e.target.value })}
+            >
+              <option value="loose">loose</option>
+              <option value="strict">strict</option>
+            </select>
+          </div>
+          <SliderRow
+            id="flow-set-fit-padding"
+            label="Fit-view padding"
+            min={0.05} max={0.5} step={0.01}
+            value={settings.fitViewPadding}
+            onChange={(v) => onChange({ fitViewPadding: v })}
+          />
+          <SliderRow
+            id="flow-set-max-zoom"
+            label="Max zoom"
+            min={1.5} max={4} step={0.1}
+            value={settings.maxZoom}
+            onChange={(v) => onChange({ maxZoom: v })}
+            suffix="x"
+          />
+          <SliderRow
+            id="flow-set-min-zoom"
+            label="Min zoom"
+            min={0.1} max={1} step={0.05}
+            value={settings.minZoom}
+            onChange={(v) => onChange({ minZoom: v })}
+            suffix="x"
           />
         </section>
 
