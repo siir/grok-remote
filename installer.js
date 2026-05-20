@@ -15,6 +15,8 @@ import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
+import readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HERE = __dirname;
@@ -179,7 +181,7 @@ async function intro() {
       writeLn(`${gradColor(i, FIGLET_GR.length)}${FIGLET_GR[i]}${reset}`);
     }
     writeLn(`${MUT}        ${SUBTITLE}${reset}`);
-    writeLn(`${DIM}        your grok agent, on your tailnet${reset}`);
+    writeLn(`${DIM}        your grok agent · local or tailnet${reset}`);
     writeLn();
     return;
   }
@@ -203,9 +205,35 @@ async function intro() {
     write('\x1b[2K\r' + gradColor(i, FIGLET_GR.length) + FIGLET_GR[i] + reset + '\n');
   }
   writeLn(`${MUT}        ${SUBTITLE}${reset}`);
-  writeLn(`${DIM}        your grok agent, on your tailnet${reset}`);
+  writeLn(`${DIM}        your grok agent · local or tailnet${reset}`);
   writeLn();
   showCursor();
+}
+
+// ─── mode prompt ─────────────────────────────────────────────────────────
+// Ask the user whether they want local-only or tailnet mode. Honors flags
+// and env, and falls back to tailnet on non-TTY (preserves prior behavior).
+async function chooseMode() {
+  const args = process.argv.slice(2);
+  if (args.includes('--local') || args.includes('-l')) return 'local';
+  if (args.includes('--tailnet')) return 'tailnet';
+  if (process.env.NO_PROMPT === '1') return 'tailnet';
+  if (!process.stdin.isTTY) return 'tailnet';
+
+  writeLn(`${WHITE}${bold}choose a mode:${reset}`);
+  writeLn(`  ${BLUE}[1]${reset} ${WHITE}local-only${reset}      ${MUT}(just this Mac, no tailscale)${reset}`);
+  writeLn(`  ${BLUE}[2]${reset} ${WHITE}tailnet${reset}         ${MUT}(reach grok-remote from any device on your tailnet)${reset}`);
+  const rl = readline.createInterface({ input, output });
+  let answer = '';
+  try {
+    answer = (await rl.question(`${MUT}default [2]: ${reset}`)).trim().toLowerCase();
+  } finally {
+    rl.close();
+  }
+  writeLn();
+  if (answer === '1' || answer === 'local' || answer === 'l') return 'local';
+  // Default and explicit 2/tailnet/t all map to tailnet.
+  return 'tailnet';
 }
 
 // ─── shell helpers ───────────────────────────────────────────────────────
@@ -535,30 +563,45 @@ async function stepInstallGrCommand() {
 
 // ─── finale ──────────────────────────────────────────────────────────────
 async function finale() {
-  const url = ctx.tailnetURL || `http://localhost:${ctx.appPort || 7910}`;
-  const dns = ctx.tailnetDNS || '(local)';
-  const ip = ctx.tailnetIP || '127.0.0.1';
+  const localURL = ctx.localURL || `http://localhost:${ctx.appPort || 7910}`;
+  const isTailnet = ctx.mode !== 'local' && !!ctx.tailnetURL;
   writeLn();
   // ASCII frame
   const frameTop = `${DIM}╔══════════════════════════════════════════════════════════════════╗${reset}`;
   const frameBot = `${DIM}╚══════════════════════════════════════════════════════════════════╝${reset}`;
   const frameMid = (s) => `${DIM}║${reset}  ${s}${' '.repeat(Math.max(0, 64 - stripAnsi(s).length))}${DIM}║${reset}`;
   writeLn(frameTop);
-  writeLn(frameMid(`${GOOD}● ready${reset}  ${dim}grok-remote is live on your tailnet${reset}`));
-  writeLn(frameMid(''));
-  writeLn(frameMid(`${MUT}url:${reset} ${BLUE}${bold}${url}${reset}`));
-  writeLn(frameMid(`${MUT}dns:${reset} ${WHITE}${dns}${reset}`));
-  writeLn(frameMid(`${MUT}ip :${reset} ${WHITE}${ip}${reset}`));
+  if (isTailnet) {
+    writeLn(frameMid(`${GOOD}● ready${reset}   ${dim}grok-remote is live on your tailnet${reset}`));
+    writeLn(frameMid(''));
+    writeLn(frameMid(`${MUT}tailnet url:${reset} ${BLUE}${bold}${ctx.tailnetURL}${reset}`));
+    writeLn(frameMid(`${MUT}local url  :${reset} ${BLUE}${bold}${localURL}${reset}`));
+    writeLn(frameMid(`${MUT}dns        :${reset} ${WHITE}${ctx.tailnetDNS || '(none)'}${reset}`));
+    writeLn(frameMid(`${MUT}ip         :${reset} ${WHITE}${ctx.tailnetIP || '127.0.0.1'}${reset}`));
+  } else {
+    writeLn(frameMid(`${GOOD}● ready${reset}   ${dim}grok-remote is live on this machine${reset}`));
+    writeLn(frameMid(''));
+    writeLn(frameMid(`${MUT}url:${reset} ${BLUE}${bold}${localURL}${reset}`));
+    writeLn(frameMid(`${dim}tailscale not enabled (re-run with --tailnet to set it up)${reset}`));
+  }
   writeLn(frameMid(''));
   writeLn(frameMid(`${dim}pm2 logs grok-remote${reset}    ${MUT}# follow${reset}`));
   writeLn(frameMid(`${dim}pm2 restart grok-remote${reset} ${MUT}# restart${reset}`));
   writeLn(frameMid(`${dim}pm2 stop grok-remote${reset}    ${MUT}# stop${reset}`));
   writeLn(frameBot);
   writeLn();
-  writeLn(`${TEAL}${bold}tip${reset}  run ${BLUE}gr${reset} from anywhere to check status, open the dashboard, or re-run setup.`);
+  if (isTailnet) {
+    writeLn(`${TEAL}${bold}tip${reset}  run ${BLUE}gr${reset} from anywhere on your tailnet to check status, open the dashboard, or re-run setup.`);
+  } else {
+    writeLn(`${TEAL}${bold}tip${reset}  run ${BLUE}gr${reset} to check status, open the dashboard, or re-run setup.`);
+  }
   writeLn();
   writeLn(`${AMBR}⚠ Not affiliated with xAI, grok, or Tailscale.${reset}`);
-  writeLn(`${MUT}Community tool. Reach your agent from anywhere on your tailnet.${reset}`);
+  if (isTailnet) {
+    writeLn(`${MUT}Community tool. Reach your agent from anywhere on your tailnet.${reset}`);
+  } else {
+    writeLn(`${MUT}Community tool. Running locally on this machine.${reset}`);
+  }
   writeLn();
 }
 function stripAnsi(s) { return s.replace(/\x1b\[[0-9;]*m/g, ''); }
@@ -614,7 +657,10 @@ async function openInBrowser(url) {
 async function stepOpenBrowser() {
   return step('open dashboard in Chrome', async () => {
     if (!shouldAutoOpen()) return { status: 'skip', detail: 'disabled via flag/env' };
-    const url = ctx.tailnetURL || `http://localhost:${ctx.appPort || 7910}`;
+    // Prefer tailnet URL when available; fall back to local URL otherwise.
+    const url = (ctx.mode !== 'local' && ctx.tailnetURL)
+      ? ctx.tailnetURL
+      : (ctx.localURL || `http://localhost:${ctx.appPort || 7910}`);
     // Give the server a beat to accept connections.
     await sleep(800);
     return openInBrowser(url);
@@ -624,15 +670,19 @@ async function stepOpenBrowser() {
 // ─── main ────────────────────────────────────────────────────────────────
 async function main() {
   ctx.appPort = parseInt(process.env.PORT || '7910', 10);
+  ctx.localURL = `http://localhost:${ctx.appPort}`;
 
   try {
     await intro();
+    ctx.mode = await chooseMode();
     await stepCheckNode();
     await stepEnsurePM2();
-    await stepEnsureTailscale();
-    await stepStartTailscaled();
-    await stepTailscaleAuth();
-    await stepResolveTailnetURL();
+    if (ctx.mode !== 'local') {
+      await stepEnsureTailscale();
+      await stepStartTailscaled();
+      await stepTailscaleAuth();
+      await stepResolveTailnetURL();
+    }
     await stepNpmInstall();
     await stepBuildVite();
     await stepWriteEcosystem();
