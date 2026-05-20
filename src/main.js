@@ -325,20 +325,23 @@ function mountDashboard() {
     });
   }
 
-  // "Any agent active" indicator on the brand. Listens to the same
-  // agents-refresh event the sidebar dispatches and shows a pulsing
-  // amber dot whenever at least one agent has inFlight > 0 or is running.
+  // "Any agent active" indicator on the brand + document title prefix.
+  // Listens to the same agents-refresh event the sidebar dispatches and
+  // shows a pulsing amber dot whenever at least one agent has inFlight > 0
+  // or is running. The title prefix surfaces activity in browser tabs and
+  // the dock when the dashboard is fully out of view.
   const brandActive = document.getElementById('brand-active');
-  if (brandActive) {
-    document.addEventListener('grok-remote:agents-refresh', (ev) => {
-      const list = (ev && ev.detail) || [];
-      const active = list.some((a) =>
-        (typeof a?.inFlight === 'number' && a.inFlight > 0) ||
-        (a?.status === 'running')
-      );
-      brandActive.hidden = !active;
-    });
-  }
+  const baseTitle = document.title;
+  document.addEventListener('grok-remote:agents-refresh', (ev) => {
+    const list = (ev && ev.detail) || [];
+    const active = list.some((a) =>
+      (typeof a?.inFlight === 'number' && a.inFlight > 0) ||
+      (a?.status === 'running')
+    );
+    if (brandActive) brandActive.hidden = !active;
+    const wantTitle = active ? `(*) ${baseTitle}` : baseTitle;
+    if (document.title !== wantTitle) document.title = wantTitle;
+  });
 
   // close drawer when a sidebar agent is picked on narrow screens.
   shell.addEventListener('click', (ev) => {

@@ -28,6 +28,7 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import { api } from '../../lib/api.js';
+import { fmtTokens } from '../../lib/format.js';
 
 // How long a finished tool-call node lingers on the canvas before fading out.
 const TOOL_NODE_LINGER_MS = 1800;
@@ -465,19 +466,22 @@ function FlowInner({ filterIds = null }) {
         {agents.length === 0 ? (
           <div className="flow-empty">no agents yet. spawn one from the conversations view.</div>
         ) : (
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={NODE_TYPES}
-            onNodeClick={onNodeClick}
-            fitView
-            proOptions={{ hideAttribution: true }}
-            minZoom={0.3}
-            maxZoom={1.5}
-          >
-            <Background gap={24} size={1} color="var(--border)" />
-            <Controls showInteractive={false} />
-          </ReactFlow>
+          <>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={NODE_TYPES}
+              onNodeClick={onNodeClick}
+              fitView
+              proOptions={{ hideAttribution: true }}
+              minZoom={0.3}
+              maxZoom={1.5}
+            >
+              <Background gap={24} size={1} color="var(--border)" />
+              <Controls showInteractive={false} />
+            </ReactFlow>
+            <FlowTotalsOverlay agents={agents} agentState={agentState} />
+          </>
         )}
       </div>
     </section>
@@ -490,6 +494,44 @@ function countActive(calls) {
     if (!c.expiresAt) n++;
   }
   return n;
+}
+
+function FlowTotalsOverlay({ agents, agentState }) {
+  let totalTokens = 0;
+  let totalInFlight = 0;
+  let runningAgents = 0;
+  for (const a of agents) {
+    const st = agentState[a.id] || {};
+    const tok = (typeof st.tokens === 'number' && st.tokens > 0)
+      ? st.tokens
+      : (typeof a.totalTokens === 'number' ? a.totalTokens : 0);
+    totalTokens += tok || 0;
+    totalInFlight += (typeof st.inFlight === 'number' ? st.inFlight : 0);
+    const status = st.status || a.status;
+    if (status === 'running') runningAgents++;
+  }
+  if (!totalTokens && !totalInFlight && !runningAgents) return null;
+  return (
+    <div className="flow-totals">
+      {runningAgents > 0 && (
+        <span className="flow-totals__cell" title={`${runningAgents} agent${runningAgents === 1 ? '' : 's'} running`}>
+          <span className="flow-totals__dot flow-totals__dot--running" />
+          {runningAgents} running
+        </span>
+      )}
+      {totalInFlight > 0 && (
+        <span className="flow-totals__cell" title={`${totalInFlight} tool call${totalInFlight === 1 ? '' : 's'} in flight across all agents`}>
+          <span className="flow-totals__dot flow-totals__dot--inflight" />
+          {totalInFlight} tool{totalInFlight === 1 ? '' : 's'}
+        </span>
+      )}
+      {totalTokens > 0 && (
+        <span className="flow-totals__cell flow-totals__cell--tokens" title={`${totalTokens.toLocaleString()} tokens across all agents`}>
+          {fmtTokens(totalTokens)} tok
+        </span>
+      )}
+    </div>
+  );
 }
 
 export default function FlowApp(props) {
