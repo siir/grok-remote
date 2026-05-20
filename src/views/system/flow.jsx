@@ -116,7 +116,12 @@ function layoutAgents(agents) {
 
 // ── main app ──────────────────────────────────────────────────────────────
 
-function FlowInner() {
+// `filterIds` (optional) limits the canvas to a fixed set of agent ids.
+// When set we also drop the "show archived" toggle and the polling-driven
+// list mutation: the canvas is scoped to exactly that conversation.
+function FlowInner({ filterIds = null }) {
+  const scoped = Array.isArray(filterIds) && filterIds.length > 0;
+
   const [agents, setAgents]               = useState([]);
   const [showArchived, setShowArchived]   = useState(false);
   const [agentState, setAgentState]       = useState({}); // id -> { status, tokens, inFlight, calls: {id -> {title, status, expiresAt}} }
@@ -130,6 +135,8 @@ function FlowInner() {
   // Keep `showArchived` reachable from the polling effect without re-running it.
   const showArchivedRef = useRef(showArchived);
   useEffect(() => { showArchivedRef.current = showArchived; }, [showArchived]);
+  const filterIdsRef = useRef(filterIds);
+  useEffect(() => { filterIdsRef.current = filterIds; }, [filterIds]);
 
   // ── pure helpers that mutate state immutably ───────────────────────────
 
@@ -246,7 +253,14 @@ function FlowInner() {
     try {
       const list = await api.listAgents();
       const arr = Array.isArray(list) ? list : (list && list.agents) || [];
-      const filtered = showArchivedRef.current ? arr : arr.filter(a => !a.archived);
+      const fids = filterIdsRef.current;
+      let filtered;
+      if (Array.isArray(fids) && fids.length > 0) {
+        const allow = new Set(fids);
+        filtered = arr.filter(a => allow.has(a.id));
+      } else {
+        filtered = showArchivedRef.current ? arr : arr.filter(a => !a.archived);
+      }
       setAgents(filtered.sort((a, b) => {
         const sa = STATUS_RANK[normaliseStatus(a.status)] ?? 9;
         const sb = STATUS_RANK[normaliseStatus(b.status)] ?? 9;
@@ -386,20 +400,24 @@ function FlowInner() {
   // ── render ─────────────────────────────────────────────────────────────
 
   return (
-    <section className="system-page system-page--flow">
+    <section className={`system-page system-page--flow${scoped ? ' system-page--flow-scoped' : ''}`}>
       <div className="flow-toolbar">
-        <h2 className="system-page-title flow-toolbar__title">Live agent flow</h2>
+        {scoped
+          ? <h2 className="system-page-title flow-toolbar__title">Conversation flow</h2>
+          : <h2 className="system-page-title flow-toolbar__title">Live agent flow</h2>}
         <div className="flow-toolbar__spacer" />
         <button type="button" className="flow-toolbar__btn" onClick={refresh}>refresh</button>
         <button type="button" className="flow-toolbar__btn" onClick={handleFit}>fit view</button>
-        <label className="flow-toolbar__check">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(ev) => setShowArchived(ev.target.checked)}
-          />
-          <span>show archived</span>
-        </label>
+        {!scoped && (
+          <label className="flow-toolbar__check">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(ev) => setShowArchived(ev.target.checked)}
+            />
+            <span>show archived</span>
+          </label>
+        )}
         <span className="flow-toolbar__count">{agents.length} agent{agents.length === 1 ? '' : 's'}</span>
       </div>
       <div className="flow-canvas">

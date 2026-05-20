@@ -15,6 +15,7 @@ import { api } from '../lib/api.js';
 import { openStream } from '../lib/sse.js';
 import { mountFilesTab, unmountFilesTab } from './files.js';
 import { mountTraceTab, unmountTraceTab } from './trace.js';
+import { mountScoped as mountFlowTab, unmount as unmountFlowTab } from './system/flow.js';
 import attachSlashPalette from '../lib/slash-palette.js';
 import { setupImageAttach } from '../lib/attach-images.js';
 import {
@@ -49,6 +50,8 @@ export class ChatView {
     this.infoPane  = el('div', { class: 'pane pane--info hidden' }, el('div', { class: 'pane-empty' }, 'no agent selected'));
     this.tracePane = el('div', { class: 'pane pane--trace hidden' });
     this.traceMounted = false;
+    this.flowPane = el('div', { class: 'pane pane--flow hidden' });
+    this.flowMounted = false;
 
     this.toastHost = el('div', { class: 'toast-host' });
 
@@ -74,6 +77,7 @@ export class ChatView {
         this.filesPane,
         this.infoPane,
         this.tracePane,
+        this.flowPane,
         this.toastHost,
       ),
     );
@@ -127,6 +131,10 @@ export class ChatView {
       unmountTraceTab();
       this.traceMounted = false;
     }
+    if (this.flowMounted) {
+      unmountFlowTab();
+      this.flowMounted = false;
+    }
     if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
@@ -151,6 +159,7 @@ export class ChatView {
       files:        make('files',        'Files'),
       info:         make('info',         'Info'),
       trace:        make('trace',        'Trace'),
+      flow:         make('flow',         'Flow'),
     };
     this.starBtn = el('button', {
       class: 'chat-star',
@@ -183,6 +192,7 @@ export class ChatView {
       this.tabBtns.files,
       this.tabBtns.info,
       this.tabBtns.trace,
+      this.tabBtns.flow,
       el('span', { class: 'tabs-spacer' }),
       this.starBtn,
       this.settingsBtn,
@@ -296,6 +306,7 @@ export class ChatView {
     this.filesPane.classList.toggle('hidden', key !== 'files');
     this.infoPane.classList.toggle('hidden', key !== 'info');
     this.tracePane.classList.toggle('hidden', key !== 'trace');
+    this.flowPane.classList.toggle('hidden', key !== 'flow');
 
     if (key === 'files') {
       if (this.agentId) {
@@ -321,6 +332,21 @@ export class ChatView {
     } else if (this.traceMounted) {
       unmountTraceTab();
       this.traceMounted = false;
+    }
+
+    // Flow tab: scoped to just this conversation's agent. Lazily mounts
+    // the same ReactFlow component as the global #/flow page but with a
+    // filterIds prop so only this agent's node + tool-call satellites show.
+    if (key === 'flow') {
+      if (this.agentId) {
+        mountFlowTab(this.flowPane, [this.agentId]);
+        this.flowMounted = true;
+      } else {
+        this.flowPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+      }
+    } else if (this.flowMounted) {
+      unmountFlowTab();
+      this.flowMounted = false;
     }
 
     if (key === 'info') {
@@ -499,6 +525,11 @@ export class ChatView {
       unmountTraceTab();
       this.traceMounted = false;
       this.tracePane.replaceChildren();
+    }
+    if (this.flowMounted) {
+      unmountFlowTab();
+      this.flowMounted = false;
+      this.flowPane.replaceChildren();
     }
 
     if (!agent || !agent.id) {

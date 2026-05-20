@@ -12,6 +12,17 @@ let activeRoot      = null;
 let mountGeneration = 0;
 
 export async function mount(container, route) {
+  return _doMount(container, { route });
+}
+
+// Per-conversation flow tab. Scopes the canvas to a single agent id
+// (or any small list) so the chat view only shows that agent's nodes
+// and tool calls.
+export async function mountScoped(container, agentIds) {
+  return _doMount(container, { filterIds: Array.isArray(agentIds) ? agentIds : [agentIds] });
+}
+
+async function _doMount(container, appProps) {
   activeContainer = container;
   container.replaceChildren();
 
@@ -31,7 +42,7 @@ export async function mount(container, route) {
   }
 
   activeRoot = createRoot(container);
-  activeRoot.render(createElement(FlowApp, { route }));
+  activeRoot.render(createElement(FlowApp, appProps));
 }
 
 export function unmount() {
