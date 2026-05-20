@@ -746,10 +746,29 @@ function applyAgentEventToState(cur, name, payload, opts) {
           }]);
         }
         let ms = (next.milestones || []).slice();
-        if (firstThisTurn) {
-          ms.push({ kind: 'sub-agent-spawn', icon: 'S', label: `turn ${turn} spawned sub-agent`, t: at });
+        // Roll up sub-agent spawns into a single per-turn milestone with a
+        // running count instead of one-per-child (which floods the strip
+        // when an agent fan-outs to 5+ sub-agents in a single turn).
+        const spawnIdx = ms.findIndex(m => m.kind === 'sub-agent-spawn' && m._turn === turn);
+        if (spawnIdx < 0) {
+          ms.push({
+            kind: 'sub-agent-spawn',
+            icon: 'S',
+            label: `turn ${turn}: 1 sub-agent spawned`,
+            t: at,
+            _turn: turn,
+            _count: 1,
+          });
+        } else {
+          const prev = ms[spawnIdx];
+          const count = (prev._count || 1) + 1;
+          ms[spawnIdx] = {
+            ...prev,
+            label: `turn ${turn}: ${count} sub-agents spawned`,
+            _count: count,
+            t: prev.t, // keep the original spawn time for chronological order
+          };
         }
-        ms.push({ kind: 'sub-agent-start', icon: 'S', label: `sub-agent started: ${truncCmd(label)}`, t: at });
         if (ms.length > MILESTONE_CAP) ms = ms.slice(ms.length - MILESTONE_CAP);
         next = { ...next, status: 'running', subAgents, milestones: ms, lastActivityAt: at };
         if (!next._turnHasMilestone) {
@@ -848,12 +867,36 @@ function applyAgentEventToState(cur, name, payload, opts) {
           ? 'Running' : status;
         let ms = (next.milestones || []).slice();
         if (reallyDone && !prev.endedAt) {
-          ms.push({
-            kind: status === 'Failed' ? 'sub-agent-fail' : 'sub-agent-end',
-            icon: 'S',
-            label: `sub-agent ${isSubagentFinal ? 'completed' : String(status).toLowerCase()}: ${truncCmd(prev.label)}`,
-            t: at,
-          });
+          // Roll up sub-agent completions per-turn (same approach as the
+          // spawn rollup above). Failed runs get their own kind so they
+          // stand out instead of being lumped with successes.
+          const isFail = (status === 'Failed' || status === 'canceled');
+          const turn = prev._turnSpawn || (next.turn || 1);
+          const kindForRollup = isFail ? 'sub-agent-fail' : 'sub-agent-end';
+          const idx = ms.findIndex(m => m.kind === kindForRollup && m._turn === turn);
+          if (idx < 0) {
+            ms.push({
+              kind: kindForRollup,
+              icon: 'S',
+              label: isFail
+                ? `turn ${turn}: 1 sub-agent failed`
+                : `turn ${turn}: 1 sub-agent done`,
+              t: at,
+              _turn: turn,
+              _count: 1,
+            });
+          } else {
+            const prevMs = ms[idx];
+            const count = (prevMs._count || 1) + 1;
+            ms[idx] = {
+              ...prevMs,
+              label: isFail
+                ? `turn ${turn}: ${count} sub-agents failed`
+                : `turn ${turn}: ${count} sub-agents done`,
+              _count: count,
+              t: at,
+            };
+          }
           if (ms.length > MILESTONE_CAP) ms = ms.slice(ms.length - MILESTONE_CAP);
         }
         const merged = {
