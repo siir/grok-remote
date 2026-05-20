@@ -825,13 +825,37 @@ function handleBgTaskRead(req, res, rec, tid) {
 
 function handleTerminalKill(req, res, rec, tid) {
   const a = manager.getRaw(rec.id);
+  // First try the ACP terminal host (our own spawn).
   const host = a && a.client && a.client.terminalHost;
   const t = host && host._terminals && host._terminals.get(tid);
-  if (!t) return sendJson(res, 404, { ok: false, error: 'terminal not found' });
+  if (t) {
+    try {
+      if (t.proc && !t.exited) t.proc.kill('SIGTERM');
+    } catch { /* ignore */ }
+    return sendJson(res, 200, { ok: true });
+  }
+  // Otherwise: grok-owned bg task. We don't have the PID directly, so we
+  // pkill -f over the task's cwd substring (matches both the npm wrapper
+  // and any spawned child like vite). Mark the record completed so the UI
+  // reflects the kill on the next poll even before the task_completed
+  // notification arrives from the agent.
+  const bg = a && a.bgTasks && a.bgTasks.get(tid);
+  if (!bg) return sendJson(res, 404, { ok: false, error: 'terminal not found' });
+  if (bg.completed) return sendJson(res, 200, { ok: true, alreadyExited: true });
+  const cwd = bg.cwd || '';
+  if (!cwd) return sendJson(res, 500, { ok: false, error: 'task has no cwd; cannot derive kill pattern' });
   try {
-    if (t.proc && !t.exited) t.proc.kill('SIGTERM');
-  } catch { /* ignore */ }
-  return sendJson(res, 200, { ok: true });
+    spawnSync('/usr/bin/pkill', ['-TERM', '-f', cwd], { timeout: 4000 });
+  } catch (err) {
+    return sendJson(res, 500, { ok: false, error: `pkill failed: ${err.message}` });
+  }
+  // Optimistically mark the task completed; if the agent later emits
+  // task_completed it'll update the exit_code/signal fields.
+  bg.completed = true;
+  bg.signal    = bg.signal || 'killed-by-user';
+  bg.endedAt   = Date.now();
+  try { manager.emit('list_changed', { event: 'bg_tasks', id: rec.id, count: 0 }); } catch { /* ignore */ }
+  return sendJson(res, 200, { ok: true, source: 'grok', killed: true });
 }
 
 function handleAgentsStream(req, res) {

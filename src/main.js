@@ -586,8 +586,27 @@ function openBgViewer(getSnapshot) {
             !exited && el('button', {
               type: 'button', class: 'bgglobal-viewer__kill',
               onclick: async (ev) => {
-                ev.currentTarget.disabled = true;
-                try { await api.terminals.kill(g.agentId, t.id); } catch { /* ignore */ }
+                const btn = ev.currentTarget;
+                btn.disabled = true;
+                btn.textContent = 'killing...';
+                row.classList.add('bgglobal-viewer__term--killing');
+                try {
+                  await api.terminals.kill(g.agentId, t.id);
+                  btn.textContent = 'kill sent';
+                  // Replace the status pill text so the user sees an
+                  // immediate confirmation before the next poll arrives.
+                  const stEl = row.querySelector('.bgglobal-viewer__term-status');
+                  if (stEl) {
+                    stEl.replaceChildren(
+                      el('span', { class: 'bgglobal-viewer__term-dot' }),
+                      document.createTextNode('killing'),
+                    );
+                  }
+                } catch (err) {
+                  btn.disabled = false;
+                  btn.textContent = 'kill failed; retry';
+                  btn.title = err.message;
+                }
               },
             }, 'kill'),
           ),

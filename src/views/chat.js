@@ -1213,10 +1213,11 @@ export class ChatView {
   }
 
   _renderBgTermsStrip(list) {
-    // Show running first, then recently exited (last ~60s). Hide if empty.
-    const now = Date.now();
-    const recent = list.filter(t => !t.exited || (t.exitedAt == null) || (now - (t.exitedAt || now) < 60_000));
-    if (!recent.length) {
+    // Active only by default. Exited entries hide; "view all (N)" link
+    // opens the per-conversation viewer that shows the full list.
+    const running = (list || []).filter(t => !t.exited);
+    const exitedCount = (list || []).length - running.length;
+    if (!running.length && !exitedCount) {
       this.bgTermsStripEl.replaceChildren();
       this.bgTermsStripEl.hidden = true;
       return;
@@ -1224,32 +1225,89 @@ export class ChatView {
     this.bgTermsStripEl.hidden = false;
     const seen = new Set();
     this.bgTermsStripEl.replaceChildren();
-    // Header label
     this.bgTermsStripEl.appendChild(el('span', { class: 'bgterms-label' }, 'bg shells'));
-    for (const t of recent) {
+    for (const t of running) {
       seen.add(t.id);
-      const exited = !!t.exited;
-      const code = t.exitStatus && (t.exitStatus.exitCode ?? t.exitStatus.signal);
       const short = t.id.replace(/^term-/, '').slice(0, 6);
       const cmdShort = (t.command || '').length > 60 ? (t.command || '').slice(0, 57) + '...' : (t.command || '');
       const chip = el('button', {
         type: 'button',
-        class: `bgterms-chip ${exited ? 'bgterms-chip--exited' : 'bgterms-chip--running'}`,
-        title: `${t.command}\ncwd: ${t.cwd}\n${exited ? `exit ${code}` : 'running'}`,
+        class: 'bgterms-chip bgterms-chip--running',
+        title: `${t.command}\ncwd: ${t.cwd}\nrunning`,
         onclick: () => this._openBgTermViewer(t.id),
       },
         el('span', { class: 'bgterms-chip__dot' }),
         el('span', { class: 'bgterms-chip__id' }, short),
         el('span', { class: 'bgterms-chip__cmd' }, cmdShort || '(no command)'),
-        el('span', { class: 'bgterms-chip__status' },
-          exited ? `exit ${code ?? '?'}` : 'running'),
+        el('span', { class: 'bgterms-chip__status' }, 'running'),
       );
       this.bgTermsStripEl.appendChild(chip);
     }
-    // Drop tracked chips no longer present.
+    if (exitedCount > 0) {
+      this.bgTermsStripEl.appendChild(el('button', {
+        type: 'button',
+        class: 'bgterms-more',
+        title: `${exitedCount} exited task${exitedCount === 1 ? '' : 's'}; click to see all`,
+        onclick: () => this._openBgListViewer(list),
+      }, `view all (+${exitedCount} exited)`));
+    } else if (running.length === 0) {
+      // Nothing running but exited entries exist: show a tiny dim link.
+      this.bgTermsStripEl.appendChild(el('button', {
+        type: 'button',
+        class: 'bgterms-more',
+        onclick: () => this._openBgListViewer(list),
+      }, `view all (${exitedCount} exited)`));
+    }
     for (const tid of Array.from(this._bgTermsByCard.keys())) {
       if (!seen.has(tid)) this._bgTermsByCard.delete(tid);
     }
+  }
+
+  // Modal-style overlay listing every bg task (running + exited) for this
+  // conversation. Read-only; clicking a row opens the live viewer.
+  _openBgListViewer(initial) {
+    if (this._bgListViewerEl) { this._bgListViewerEl.remove(); this._bgListViewerEl = null; }
+    const overlay = el('div', { class: 'bgterm-viewer bgterm-list-viewer' });
+    const closeBtn = el('button', { type: 'button', class: 'bgterm-viewer__close',
+      onclick: () => { overlay.remove(); this._bgListViewerEl = null; },
+    }, '×');
+    overlay.appendChild(el('div', { class: 'bgterm-viewer__head' },
+      el('div', { class: 'bgterm-viewer__title' }, 'all bg shells in this conversation'),
+      closeBtn,
+    ));
+    const body = el('div', { class: 'bgterm-list-viewer__body' });
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+    this._bgListViewerEl = overlay;
+    const render = (list) => {
+      body.replaceChildren();
+      if (!list.length) {
+        body.appendChild(el('div', { class: 'bgterm-list-viewer__empty' }, 'no bg shells.'));
+        return;
+      }
+      for (const t of list) {
+        const code = t.exitStatus && (t.exitStatus.exitCode ?? t.exitStatus.signal);
+        const row = el('button', {
+          type: 'button',
+          class: `bgterm-list-viewer__row ${t.exited ? 'bgterm-list-viewer__row--exited' : 'bgterm-list-viewer__row--running'}`,
+          onclick: () => { overlay.remove(); this._bgListViewerEl = null; this._openBgTermViewer(t.id); },
+        },
+          el('span', { class: 'bgterm-list-viewer__status' }, t.exited ? `exit ${code ?? '?'}` : 'running'),
+          el('span', { class: 'bgterm-list-viewer__id' }, t.id.replace(/^term-/, '').slice(0, 8)),
+          el('span', { class: 'bgterm-list-viewer__cmd' }, t.command || '(no command)'),
+        );
+        body.appendChild(row);
+      }
+    };
+    render(initial || []);
+    // Keep the list refreshed while open.
+    const timer = setInterval(async () => {
+      if (!overlay.isConnected) { clearInterval(timer); return; }
+      try {
+        const r = await api.terminals.list(this.agentId);
+        if (overlay.isConnected) render(r && r.terminals || []);
+      } catch { /* ignore */ }
+    }, 1500);
   }
 
   async _openBgTermViewer(tid) {
@@ -1268,7 +1326,18 @@ export class ChatView {
       type: 'button', class: 'bgterm-viewer__kill',
       onclick: async () => {
         killBtn.disabled = true;
-        try { await api.terminals.kill(this.agentId, tid); } catch { /* ignore */ }
+        killBtn.textContent = 'killing...';
+        try {
+          await api.terminals.kill(this.agentId, tid);
+          // Visible confirmation before the next poll arrives.
+          killBtn.textContent = 'kill sent';
+          status.textContent = 'killing (waiting for exit)';
+          status.className = 'bgterm-viewer__status bgterm-viewer__status--killing';
+        } catch (err) {
+          killBtn.disabled = false;
+          killBtn.textContent = 'kill failed; retry';
+          status.textContent = `kill failed: ${err.message}`;
+        }
       },
     }, 'kill');
     overlay.appendChild(el('div', { class: 'bgterm-viewer__head' }, title, status, killBtn, closeBtn));
@@ -1284,12 +1353,18 @@ export class ChatView {
         if (!this._bgTermViewerEl) return;
         cmd.textContent = r.command || '';
         const code = r.exitStatus && (r.exitStatus.exitCode ?? r.exitStatus.signal);
-        status.textContent = r.exited ? `exited (${code ?? '?'})` : 'running';
-        status.className = `bgterm-viewer__status ${r.exited ? 'bgterm-viewer__status--exited' : 'bgterm-viewer__status--running'}`;
+        // Don't clobber an in-flight "killing" state with a stale "running".
+        if (status.className.indexOf('--killing') === -1 || r.exited) {
+          status.textContent = r.exited ? `exited (${code ?? '?'})` : 'running';
+          status.className = `bgterm-viewer__status ${r.exited ? 'bgterm-viewer__status--exited' : 'bgterm-viewer__status--running'}`;
+        }
         const wasAtBottom = (pre.scrollTop + pre.clientHeight) >= (pre.scrollHeight - 12);
         pre.textContent = (r.truncated ? '[... older output trimmed ...]\n' : '') + (r.output || '');
         if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
-        if (r.exited) killBtn.disabled = true;
+        if (r.exited) {
+          killBtn.disabled = true;
+          killBtn.textContent = 'killed';
+        }
       } catch { /* ignore */ }
     };
     await refresh();
