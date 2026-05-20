@@ -669,7 +669,7 @@ function handleGlobalBgTerminals(req, res) {
   const out = [];
   let runningTotal = 0;
   for (const rec of manager.list()) {
-    const a = manager.get(rec.id);
+    const a = manager.getRaw(rec.id);
     const terminals = [];
 
     // ACP-standard terminals (server-host owned).
@@ -720,8 +720,9 @@ function handleGlobalBgTerminals(req, res) {
 
 function handleTerminalList(req, res, rec) {
   const out = [];
+  const a = manager.getRaw(rec.id);
   // ACP-standard terminals.
-  const host = rec && rec.client && rec.client.terminalHost;
+  const host = a && a.client && a.client.terminalHost;
   if (host && host._terminals) {
     for (const t of host._terminals.values()) {
       out.push({
@@ -737,7 +738,6 @@ function handleTerminalList(req, res, rec) {
     }
   }
   // grok-specific backgrounded tasks (npm run dev style).
-  const a = manager.get(rec.id);
   if (a && a.bgTasks && a.bgTasks.size) {
     for (const t of a.bgTasks.values()) {
       const exitStatus = (t.exit_code != null || t.signal)
@@ -759,7 +759,8 @@ function handleTerminalList(req, res, rec) {
 }
 
 function handleTerminalRead(req, res, rec, tid) {
-  const host = rec && rec.client && rec.client.terminalHost;
+  const a = manager.getRaw(rec.id);
+  const host = a && a.client && a.client.terminalHost;
   const t = host && host._terminals && host._terminals.get(tid);
   if (t) {
     return sendJson(res, 200, {
@@ -782,7 +783,7 @@ function handleBgTaskRead(req, res, rec, tid) {
   // Read a grok-backgrounded task: status + tail of its log file. The agent
   // emits the log path in the original `_x.ai/task_backgrounded` event so
   // we can read it directly.
-  const a = manager.get(rec.id);
+  const a = manager.getRaw(rec.id);
   const t = a && a.bgTasks && a.bgTasks.get(tid);
   if (!t) return sendJson(res, 404, { ok: false, error: 'bg task not found' });
   const TAIL_BYTES = 64 * 1024;
@@ -823,7 +824,8 @@ function handleBgTaskRead(req, res, rec, tid) {
 }
 
 function handleTerminalKill(req, res, rec, tid) {
-  const host = rec && rec.client && rec.client.terminalHost;
+  const a = manager.getRaw(rec.id);
+  const host = a && a.client && a.client.terminalHost;
   const t = host && host._terminals && host._terminals.get(tid);
   if (!t) return sendJson(res, 404, { ok: false, error: 'terminal not found' });
   try {
