@@ -626,6 +626,12 @@ body::before {
   white-space: nowrap;
 }
 .tab-tokens[hidden] { display: none; }
+.tab-tokens-delta {
+  color: var(--muted);
+  font-size: 10px;
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
 
 .tab-inflight {
   color: var(--amber);

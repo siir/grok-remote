@@ -237,11 +237,21 @@ export class ChatView {
     const t = (typeof live === 'number' && live > 0) ? live : (typeof snap === 'number' ? snap : 0);
     if (typeof t === 'number' && t > 0) {
       this.tokensPill.hidden = false;
-      this.tokensPill.textContent = fmtTokens(t) + ' tok';
-      this.tokensPill.title = `${t.toLocaleString()} tokens in context`;
+      const prev = (typeof this._lastRenderedTokens === 'number') ? this._lastRenderedTokens : 0;
+      const delta = (prev > 0 && t > prev) ? (t - prev) : 0;
+      this.tokensPill.replaceChildren(
+        document.createTextNode(fmtTokens(t) + ' tok'),
+      );
+      if (delta > 0) {
+        const deltaSpan = el('span', { class: 'tab-tokens-delta' }, ` +${fmtTokens(delta)}`);
+        this.tokensPill.appendChild(deltaSpan);
+      }
+      this.tokensPill.title = `${t.toLocaleString()} tokens in context${delta > 0 ? ` (+${delta.toLocaleString()} this turn)` : ''}`;
+      this._lastRenderedTokens = t;
     } else {
       this.tokensPill.hidden = true;
-      this.tokensPill.textContent = '';
+      this.tokensPill.replaceChildren();
+      this._lastRenderedTokens = 0;
     }
   }
 
@@ -681,9 +691,11 @@ export class ChatView {
     if (this.settingsBtn) this.settingsBtn.hidden = false;
     if (this.connectBtn)  this.connectBtn.hidden = false;
 
+    const switchingAgent = this.agentId !== agent.id;
     this.agentId = agent.id;
     this.currentAgent = agent;
     this.latestTotalTokens = (agent && agent.totalTokens) || null;
+    if (switchingAgent) this._lastRenderedTokens = 0;
     this._setComposerEnabled(true);
     this.composerCancel.disabled = true;
     this._syncConnectBtn();

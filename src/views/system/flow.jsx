@@ -177,8 +177,19 @@ function FlowInner({ filterIds = null }) {
 
   const patchAgent = useCallback((id, patch) => {
     setAgentState((prev) => {
-      const cur = prev[id] || { status: 'idle', tokens: 0, inFlight: 0, calls: {}, tokensHistory: [] };
+      // Hydrate tokensHistory from sessionStorage on first touch so the
+      // sparkline survives page reloads + view remounts.
+      let cur = prev[id];
+      if (!cur) {
+        const persisted = loadTokenHistory(id);
+        const lastTok = persisted.length ? persisted[persisted.length - 1].v : 0;
+        cur = { status: 'idle', tokens: lastTok, inFlight: 0, calls: {}, tokensHistory: persisted };
+      }
       const next = typeof patch === 'function' ? patch(cur) : { ...cur, ...patch };
+      // Persist when history grew. Cheap; runs at most ~2/sec per agent.
+      if (next.tokensHistory && next.tokensHistory !== cur.tokensHistory) {
+        saveTokenHistory(id, next.tokensHistory);
+      }
       return { ...prev, [id]: next };
     });
   }, []);
@@ -540,6 +551,25 @@ function FlowInner({ filterIds = null }) {
       </div>
     </section>
   );
+}
+
+const TOKEN_HISTORY_KEY = (id) => `grok-remote.flowTokens.${id}`;
+const TOKEN_HISTORY_MAX = 30;
+
+function loadTokenHistory(id) {
+  try {
+    const raw = sessionStorage.getItem(TOKEN_HISTORY_KEY(id));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(p => p && typeof p.t === 'number' && typeof p.v === 'number').slice(-TOKEN_HISTORY_MAX);
+  } catch { return []; }
+}
+
+function saveTokenHistory(id, history) {
+  try {
+    sessionStorage.setItem(TOKEN_HISTORY_KEY(id), JSON.stringify(history.slice(-TOKEN_HISTORY_MAX)));
+  } catch { /* quota or disabled storage: silent */ }
 }
 
 function countActive(calls) {
