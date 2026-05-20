@@ -320,6 +320,12 @@ async function handleApi(req, res, url, method) {
         if (!kill && method === 'GET')  return handleTerminalRead(req, res, rec, tid);
       }
     }
+    {
+      const bgmatch = suffix.match(/^\/bg-tasks\/([^/]+)$/);
+      if (bgmatch && method === 'GET') {
+        return handleBgTaskRead(req, res, rec, bgmatch[1]);
+      }
+    }
     if (suffix === '/publish' && method === 'POST') {
       // Wraps `grok share <sessionId>`. The agent must have a sessionId,
       // either live (currently connected) or persisted from a prior run.
@@ -653,29 +659,58 @@ function handleFilesRaw(req, res, rec, method) {
 }
 
 function handleGlobalBgTerminals(req, res) {
-  // Aggregate every live terminal across every connected agent, so the
-  // topbar can show "bg: N" persistently and so a global viewer can list
-  // long-running processes (like `npm run dev`) without the user having
-  // to know which conversation owns them.
+  // Aggregate every live bg shell across every agent so the topbar pill +
+  // global viewer can show long-running processes (e.g. `npm run dev`)
+  // without the user having to remember which conversation owns them.
+  //
+  // Two sources, merged:
+  //   1. acp-client.terminalHost._terminals (ACP terminal/create RPC path)
+  //   2. agent record.bgTasks (grok-specific _x.ai/task_backgrounded path)
   const out = [];
   let runningTotal = 0;
   for (const rec of manager.list()) {
     const a = manager.get(rec.id);
-    const host = a && a.client && a.client.terminalHost;
-    if (!host || !host._terminals) continue;
     const terminals = [];
-    for (const t of host._terminals.values()) {
-      terminals.push({
-        id: t.id,
-        command: t.command,
-        cwd: t.cwd,
-        exited: !!t.exited,
-        exitStatus: t.exitStatus || null,
-        bytes: t.buffer ? t.buffer.length : 0,
-        truncated: !!t.truncated,
-      });
-      if (!t.exited) runningTotal++;
+
+    // ACP-standard terminals (server-host owned).
+    const host = a && a.client && a.client.terminalHost;
+    if (host && host._terminals) {
+      for (const t of host._terminals.values()) {
+        terminals.push({
+          id: t.id,
+          source: 'acp',
+          command: t.command,
+          cwd: t.cwd,
+          exited: !!t.exited,
+          exitStatus: t.exitStatus || null,
+          bytes: t.buffer ? t.buffer.length : 0,
+          truncated: !!t.truncated,
+        });
+        if (!t.exited) runningTotal++;
+      }
     }
+
+    // grok-specific backgrounded tasks (agent-owned shells we observe).
+    if (a && a.bgTasks && a.bgTasks.size) {
+      for (const t of a.bgTasks.values()) {
+        const exitStatus = (t.exit_code != null || t.signal)
+          ? { exitCode: t.exit_code, signal: t.signal }
+          : null;
+        terminals.push({
+          id: t.id,
+          source: 'grok',
+          command: t.command,
+          cwd: t.cwd,
+          outputFile: t.output_file || null,
+          exited: !!t.completed,
+          exitStatus,
+          startedAt: t.startedAt,
+          endedAt: t.endedAt || null,
+        });
+        if (!t.completed) runningTotal++;
+      }
+    }
+
     if (terminals.length) {
       out.push({ agentId: rec.id, agentName: rec.name || rec.id, terminals });
     }
@@ -684,19 +719,41 @@ function handleGlobalBgTerminals(req, res) {
 }
 
 function handleTerminalList(req, res, rec) {
-  const host = rec && rec.client && rec.client.terminalHost;
-  if (!host || !host._terminals) return sendJson(res, 200, { ok: true, terminals: [] });
   const out = [];
-  for (const t of host._terminals.values()) {
-    out.push({
-      id: t.id,
-      command: t.command,
-      cwd: t.cwd,
-      exited: !!t.exited,
-      exitStatus: t.exitStatus || null,
-      bytes: t.buffer ? t.buffer.length : 0,
-      truncated: !!t.truncated,
-    });
+  // ACP-standard terminals.
+  const host = rec && rec.client && rec.client.terminalHost;
+  if (host && host._terminals) {
+    for (const t of host._terminals.values()) {
+      out.push({
+        id: t.id,
+        source: 'acp',
+        command: t.command,
+        cwd: t.cwd,
+        exited: !!t.exited,
+        exitStatus: t.exitStatus || null,
+        bytes: t.buffer ? t.buffer.length : 0,
+        truncated: !!t.truncated,
+      });
+    }
+  }
+  // grok-specific backgrounded tasks (npm run dev style).
+  const a = manager.get(rec.id);
+  if (a && a.bgTasks && a.bgTasks.size) {
+    for (const t of a.bgTasks.values()) {
+      const exitStatus = (t.exit_code != null || t.signal)
+        ? { exitCode: t.exit_code, signal: t.signal } : null;
+      out.push({
+        id: t.id,
+        source: 'grok',
+        command: t.command,
+        cwd: t.cwd,
+        outputFile: t.output_file || null,
+        exited: !!t.completed,
+        exitStatus,
+        startedAt: t.startedAt,
+        endedAt: t.endedAt || null,
+      });
+    }
   }
   return sendJson(res, 200, { ok: true, terminals: out });
 }
@@ -704,16 +761,64 @@ function handleTerminalList(req, res, rec) {
 function handleTerminalRead(req, res, rec, tid) {
   const host = rec && rec.client && rec.client.terminalHost;
   const t = host && host._terminals && host._terminals.get(tid);
-  if (!t) return sendJson(res, 404, { ok: false, error: 'terminal not found' });
+  if (t) {
+    return sendJson(res, 200, {
+      ok: true,
+      id: t.id,
+      source: 'acp',
+      command: t.command,
+      cwd: t.cwd,
+      exited: !!t.exited,
+      exitStatus: t.exitStatus || null,
+      truncated: !!t.truncated,
+      output: t.buffer ? t.buffer.toString('utf8') : '',
+    });
+  }
+  // Fall through to grok bg tasks (they have an output_file we tail).
+  return handleBgTaskRead(req, res, rec, tid);
+}
+
+function handleBgTaskRead(req, res, rec, tid) {
+  // Read a grok-backgrounded task: status + tail of its log file. The agent
+  // emits the log path in the original `_x.ai/task_backgrounded` event so
+  // we can read it directly.
+  const a = manager.get(rec.id);
+  const t = a && a.bgTasks && a.bgTasks.get(tid);
+  if (!t) return sendJson(res, 404, { ok: false, error: 'bg task not found' });
+  const TAIL_BYTES = 64 * 1024;
+  let output = '';
+  let truncated = false;
+  if (t.output_file) {
+    try {
+      const st = fs.statSync(t.output_file);
+      const size = st.size;
+      if (size > TAIL_BYTES) {
+        const fd = fs.openSync(t.output_file, 'r');
+        const buf = Buffer.alloc(TAIL_BYTES);
+        fs.readSync(fd, buf, 0, TAIL_BYTES, size - TAIL_BYTES);
+        fs.closeSync(fd);
+        output = buf.toString('utf8');
+        truncated = true;
+      } else {
+        output = fs.readFileSync(t.output_file, 'utf8');
+      }
+    } catch (err) {
+      output = `[grok-remote] failed to read log: ${err.message}`;
+    }
+  }
   return sendJson(res, 200, {
     ok: true,
     id: t.id,
+    source: 'grok',
     command: t.command,
     cwd: t.cwd,
-    exited: !!t.exited,
-    exitStatus: t.exitStatus || null,
-    truncated: !!t.truncated,
-    output: t.buffer ? t.buffer.toString('utf8') : '',
+    outputFile: t.output_file || null,
+    startedAt: t.startedAt,
+    endedAt: t.endedAt || null,
+    exited: !!t.completed,
+    exitStatus: (t.exit_code != null || t.signal) ? { exitCode: t.exit_code, signal: t.signal } : null,
+    truncated,
+    output,
   });
 }
 
