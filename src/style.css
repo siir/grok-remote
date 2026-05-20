@@ -4041,6 +4041,11 @@ body::before {
   border-color: var(--teal);
   color: var(--teal);
 }
+.flow-toolbar__btn--on {
+  border-color: var(--teal);
+  color: var(--teal);
+  background: rgba(94, 234, 212, 0.08);
+}
 .flow-toolbar__check {
   display: inline-flex;
   align-items: center;
@@ -4096,6 +4101,9 @@ body::before {
 }
 .flow-canvas .react-flow__node {
   font-family: var(--mono);
+}
+.flow-canvas .react-flow__node.flow-node--focus {
+  filter: drop-shadow(0 0 6px rgba(94, 234, 212, 0.55));
 }
 .flow-canvas .react-flow__handle {
   width: 6px;

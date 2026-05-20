@@ -120,7 +120,9 @@ function layoutAgents(agents) {
 // When set we also drop the "show archived" toggle and the polling-driven
 // list mutation: the canvas is scoped to exactly that conversation.
 function FlowInner({ filterIds = null }) {
-  const scoped = Array.isArray(filterIds) && filterIds.length > 0;
+  const hasFilter = Array.isArray(filterIds) && filterIds.length > 0;
+  const [showAll, setShowAll] = useState(false);
+  const scoped = hasFilter && !showAll;
 
   const [agents, setAgents]               = useState([]);
   const [showArchived, setShowArchived]   = useState(false);
@@ -137,6 +139,8 @@ function FlowInner({ filterIds = null }) {
   useEffect(() => { showArchivedRef.current = showArchived; }, [showArchived]);
   const filterIdsRef = useRef(filterIds);
   useEffect(() => { filterIdsRef.current = filterIds; }, [filterIds]);
+  const showAllRef = useRef(showAll);
+  useEffect(() => { showAllRef.current = showAll; }, [showAll]);
 
   // ── pure helpers that mutate state immutably ───────────────────────────
 
@@ -254,8 +258,9 @@ function FlowInner({ filterIds = null }) {
       const list = await api.listAgents();
       const arr = Array.isArray(list) ? list : (list && list.agents) || [];
       const fids = filterIdsRef.current;
+      const useFilter = Array.isArray(fids) && fids.length > 0 && !showAllRef.current;
       let filtered;
-      if (Array.isArray(fids) && fids.length > 0) {
+      if (useFilter) {
         const allow = new Set(fids);
         filtered = arr.filter(a => allow.has(a.id));
       } else {
@@ -281,8 +286,8 @@ function FlowInner({ filterIds = null }) {
     };
   }, [refresh]);
 
-  // Re-filter immediately when the toggle changes.
-  useEffect(() => { refresh(); }, [showArchived, refresh]);
+  // Re-filter immediately when either toggle changes.
+  useEffect(() => { refresh(); }, [showArchived, showAll, refresh]);
 
   // Open / close streams to mirror the current agent set.
   useEffect(() => {
@@ -331,15 +336,19 @@ function FlowInner({ filterIds = null }) {
   // ── derive nodes + edges ───────────────────────────────────────────────
 
   const { nodes, edges } = useMemo(() => {
+    const focusIds = (hasFilter && showAll) ? new Set(filterIds) : null;
     const agentNodes = layoutAgents(agents).map((n) => {
       const st = agentState[n.data.agentId] || {};
+      const isFocus = focusIds ? focusIds.has(n.data.agentId) : false;
       return {
         ...n,
+        className: isFocus ? 'flow-node--focus' : undefined,
         data: {
           ...n.data,
           status:   normaliseStatus(st.status || n.data.status),
           tokens:   st.tokens || 0,
           inFlight: st.inFlight || 0,
+          isFocus,
         },
       };
     });
@@ -383,7 +392,7 @@ function FlowInner({ filterIds = null }) {
     });
 
     return { nodes: [...agentNodes, ...toolNodes], edges: toolEdges };
-  }, [agents, agentState]);
+  }, [agents, agentState, hasFilter, showAll, filterIds]);
 
   // ── handlers ───────────────────────────────────────────────────────────
 
@@ -404,11 +413,21 @@ function FlowInner({ filterIds = null }) {
       <div className="flow-toolbar">
         {scoped
           ? <h2 className="system-page-title flow-toolbar__title">Conversation flow</h2>
-          : <h2 className="system-page-title flow-toolbar__title">Live agent flow</h2>}
+          : <h2 className="system-page-title flow-toolbar__title">{hasFilter ? 'All conversations' : 'Live agent flow'}</h2>}
         <div className="flow-toolbar__spacer" />
         <button type="button" className="flow-toolbar__btn" onClick={refresh}>refresh</button>
         <button type="button" className="flow-toolbar__btn" onClick={handleFit}>fit view</button>
-        {!scoped && (
+        {hasFilter && (
+          <button
+            type="button"
+            className={`flow-toolbar__btn${showAll ? ' flow-toolbar__btn--on' : ''}`}
+            onClick={() => setShowAll(v => !v)}
+            title={showAll ? 'show only this conversation' : 'show every running agent'}
+          >
+            {showAll ? 'just this' : 'show all'}
+          </button>
+        )}
+        {!scoped && !hasFilter && (
           <label className="flow-toolbar__check">
             <input
               type="checkbox"
