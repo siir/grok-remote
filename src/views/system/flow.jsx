@@ -279,10 +279,16 @@ function FlowInner({ filterIds = null }) {
 
   useEffect(() => {
     refresh();
-    pollTimerRef.current = setInterval(refresh, LIST_POLL_MS);
+    pollTimerRef.current = setInterval(() => {
+      if (document.hidden) return;
+      refresh();
+    }, LIST_POLL_MS);
+    const onVis = () => { if (!document.hidden) refresh(); };
+    document.addEventListener('visibilitychange', onVis);
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
+      document.removeEventListener('visibilitychange', onVis);
     };
   }, [refresh]);
 

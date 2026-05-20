@@ -67,6 +67,7 @@ function renderTrace(d) {
   root.appendChild(renderTimeline(d));
   root.appendChild(renderMethodDistribution(d));
   root.appendChild(renderToolLatency(d));
+  root.appendChild(renderTurnBreakdown(d));
   root.appendChild(renderTokenChart(d));
   root.appendChild(renderChatHistory(d));
   root.appendChild(renderSystemPrompt(d));
@@ -327,6 +328,103 @@ function renderToolLatency(d) {
           ),
           el('span', { class: 'trace-tool-bar-num' }, fmtMs(g.sum)),
         ),
+      )),
+    ),
+  );
+}
+
+// ── per-turn tool count ─────────────────────────────────────────────────
+
+function renderTurnBreakdown(d) {
+  // Bucket tool starts into turns. Prefer an explicit `session/prompt` RPC
+  // boundary if present; otherwise fall back to a 5-second idle gap between
+  // consecutive tool calls as the heuristic boundary.
+  const rows = Array.isArray(d.updates) ? d.updates : [];
+  if (!rows.length) return el('section', { class: 'trace-section' },
+    el('h3', { class: 'trace-section-title' }, 'tool calls per turn'),
+    el('div', { class: 'trace-section-empty' }, 'no updates to analyse.'),
+  );
+
+  // Collect tool-call starts in time order.
+  const starts = [];
+  let hasPromptMethod = false;
+  const promptTs = [];
+  for (const r of rows) {
+    const t = parseTs(r.timestamp);
+    if (!Number.isFinite(t)) continue;
+    if ((r.method || '') === 'session/prompt') {
+      hasPromptMethod = true;
+      promptTs.push(t);
+    }
+    const u = r && r.params && r.params.update;
+    if (!u || typeof u !== 'object') continue;
+    const sub = u.sessionUpdate || u.kind;
+    if (sub === 'tool_call' || sub === 'tool_call_start') starts.push(t);
+  }
+  if (!starts.length) return el('section', { class: 'trace-section' },
+    el('h3', { class: 'trace-section-title' }, 'tool calls per turn'),
+    el('div', { class: 'trace-section-empty' }, 'no tool calls in this trace.'),
+  );
+  starts.sort((a, b) => a - b);
+
+  // Bucket starts by turn boundaries.
+  const GAP_MS = 5000;
+  let turns;
+  let mode;
+  if (hasPromptMethod && promptTs.length > 0) {
+    mode = 'prompt';
+    promptTs.sort((a, b) => a - b);
+    turns = promptTs.map(t => ({ startTs: t, count: 0 }));
+    for (const s of starts) {
+      // Find latest prompt boundary <= s.
+      let idx = -1;
+      for (let i = 0; i < promptTs.length; i++) {
+        if (promptTs[i] <= s) idx = i; else break;
+      }
+      if (idx < 0) {
+        // Tool call before any prompt; treat as preamble.
+        if (!turns.length || turns[0].startTs > s) turns.unshift({ startTs: s, count: 0 });
+        turns[0].count++;
+      } else {
+        turns[idx].count++;
+      }
+    }
+  } else {
+    mode = 'gap';
+    turns = [];
+    let cur = { startTs: starts[0], count: 1, lastTs: starts[0] };
+    for (let i = 1; i < starts.length; i++) {
+      const s = starts[i];
+      if (s - cur.lastTs > GAP_MS) {
+        turns.push(cur);
+        cur = { startTs: s, count: 1, lastTs: s };
+      } else {
+        cur.count++;
+        cur.lastTs = s;
+      }
+    }
+    turns.push(cur);
+  }
+
+  const max = Math.max(1, ...turns.map(t => t.count));
+  const total = turns.reduce((a, t) => a + t.count, 0);
+  const avg = (total / turns.length).toFixed(1);
+  const subtitle = mode === 'prompt'
+    ? `${turns.length} turn${turns.length === 1 ? '' : 's'} (session/prompt boundaries)`
+    : `${turns.length} turn${turns.length === 1 ? '' : 's'} (>${GAP_MS / 1000}s idle gap heuristic)`;
+
+  return el('section', { class: 'trace-section' },
+    el('h3', { class: 'trace-section-title' }, `tool calls per turn — ${subtitle}, avg ${avg}/turn`),
+    el('div', { class: 'trace-turn-bars' },
+      ...turns.map((t, i) => el('div', {
+        class: 'trace-turn-bar',
+        title: `turn ${i + 1}: ${t.count} tool call${t.count === 1 ? '' : 's'} @ ${new Date(t.startTs).toLocaleTimeString()}`,
+      },
+        el('span', { class: 'trace-turn-bar-track' },
+          el('span', { class: 'trace-turn-bar-fill', style: { height: `${(t.count / max) * 100}%` } }),
+        ),
+        el('span', { class: 'trace-turn-bar-label' }, `t${i + 1}`),
+        el('span', { class: 'trace-turn-bar-count' }, String(t.count)),
       )),
     ),
   );

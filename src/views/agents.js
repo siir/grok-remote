@@ -197,13 +197,27 @@ export class AgentsSidebar {
 
   startPolling() {
     if (this.pollHandle) clearInterval(this.pollHandle);
-    this.pollHandle = setInterval(() => this.refresh(), 4000);
+    // Skip polling when the tab is hidden; refresh immediately on return.
+    this.pollHandle = setInterval(() => {
+      if (document.hidden) return;
+      this.refresh();
+    }, 4000);
+    if (!this._onVisibility) {
+      this._onVisibility = () => {
+        if (!document.hidden) this.refresh();
+      };
+      document.addEventListener('visibilitychange', this._onVisibility);
+    }
   }
 
   stopPolling() {
     if (this.pollHandle) {
       clearInterval(this.pollHandle);
       this.pollHandle = null;
+    }
+    if (this._onVisibility) {
+      document.removeEventListener('visibilitychange', this._onVisibility);
+      this._onVisibility = null;
     }
   }
 
