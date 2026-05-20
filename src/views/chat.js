@@ -90,12 +90,18 @@ export class ChatView {
     this._bgTermsTimer = null;
     this._bgTermViewerEl = null;
 
+    // Per-conversation strip listing skills invoked in this conversation.
+    // Populated from _decorateSkill matches; reset on agent switch.
+    this.convoSkillsStripEl = el('div', { class: 'convo-skills-strip', hidden: true });
+    this._convoSkills = new Map(); // name -> count
+
     this.root = el('section', { class: 'chat' },
       this.tabsEl,
       el('div', { class: 'chat-body' },
         el('div', { class: 'pane pane--conversation' },
           this.statusEl,
           this.bgTermsStripEl,
+          this.convoSkillsStripEl,
           this.inFlightStripEl,
           this.streamEl,
           this.composerEl,
@@ -598,6 +604,13 @@ export class ChatView {
     const name = m[1];
     Promise.resolve(this._knownSkills || this._loadSkills()).then((set) => {
       if (!set || !set.has(name)) return;
+      // Record into the per-conversation set (idempotent, count via Map).
+      const prior = this._convoSkills.get(name) || 0;
+      this._convoSkills.set(name, prior + 1);
+      this._renderConvoSkillsStrip();
+      // Fire-and-forget usage metric bump. Don't block paint.
+      try { api.skills.use(name, this.agentId).catch(() => {}); } catch { /* ignore */ }
+
       if (turn._skillBanner) return;
       const banner = el('div', { class: 'skill-banner', title: 'invoked skill (click to open the Skills page)' });
       banner.innerHTML = `
@@ -607,9 +620,33 @@ export class ChatView {
       `;
       turn._skillBanner = banner;
       // Banner sits ABOVE the user bubble so the chronology reads:
-      //   skill chip → user message → assistant turn
+      //   skill chip then user message then assistant turn.
       turn.root.insertBefore(banner, turn.user);
     });
+  }
+
+  _renderConvoSkillsStrip() {
+    if (!this.convoSkillsStripEl) return;
+    const entries = Array.from(this._convoSkills.entries());
+    if (!entries.length) {
+      this.convoSkillsStripEl.replaceChildren();
+      this.convoSkillsStripEl.hidden = true;
+      return;
+    }
+    this.convoSkillsStripEl.replaceChildren();
+    this.convoSkillsStripEl.hidden = false;
+    const label = el('span', { class: 'convo-skills-label' });
+    label.innerHTML = `<span class="convo-skills-ico">${iconHtml('skills')}</span><span>skills</span>`;
+    this.convoSkillsStripEl.appendChild(label);
+    entries.sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [name, count] of entries) {
+      const chip = el('a', {
+        href: '#/skills',
+        class: 'convo-skills-chip',
+        title: `invoked ${count}× in this conversation`,
+      }, `/${name}`);
+      this.convoSkillsStripEl.appendChild(chip);
+    }
   }
 
   _captureAgentCaps(agent) {
@@ -721,6 +758,8 @@ export class ChatView {
     if (switchingAgent) {
       this._clearAllInFlight();
       this._stopBgTerminalsPolling();
+      this._convoSkills = new Map();
+      this._renderConvoSkillsStrip();
     }
     this.agentId = agent.id;
     this.currentAgent = agent;
