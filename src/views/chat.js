@@ -1317,6 +1317,9 @@ export class ChatView {
           durEl.textContent = `${m}m${s ? ` ${s}s` : ''}`;
         }
       }
+      // Self-heal: walk the rendered pills and drop any stale chip whose
+      // card has reached terminal status without us having seen the event.
+      this._resyncInFlightStrip();
     }, 500);
   }
 
@@ -1392,13 +1395,33 @@ export class ChatView {
       if (!(opts && opts.fromHistory)) this._addInFlight(data, card.node);
       entry = turn.tools[turn.tools.length - 1];
     }
-    // Use the card's normalized status (it handles every wire-format variant
-    // including the ACP "in_progress"/"completed" path and the legacy
-    // "_meta.updateParams.status" path). Whatever made the pill render as
-    // green also tells us to clear the chip.
-    const cardStatus = (entry.card.getStatus && entry.card.getStatus() || '').toLowerCase();
-    if (['completed','failed','canceled','cancelled'].includes(cardStatus)) {
-      this._removeInFlight(data.toolCallId);
+    // Always reconcile the strip against the actual pill statuses. This is
+    // robust to wire-format variations: whatever rendered the pill as
+    // COMPLETED also drains its chip from the strip.
+    this._resyncInFlightStrip();
+  }
+
+  // Walk the current turn's tools and drop any strip chips whose card has
+  // reached a terminal status. Cheap (small N) and self-healing if an
+  // intermediate event was missed.
+  _resyncInFlightStrip() {
+    if (!this._inFlightMap.size) return;
+    const TERMINAL = new Set(['completed','failed','canceled','cancelled','success','succeeded','error','errored']);
+    // Collect all currently-rendered tool ids across all turns since strip
+    // chips can outlive a single turn boundary.
+    const liveByActive = new Map(); // id -> status string (lowercased)
+    for (const turn of this.turns) {
+      for (const t of (turn.tools || [])) {
+        const s = (t.card && t.card.getStatus && t.card.getStatus() || '').toLowerCase();
+        liveByActive.set(t.id, s);
+      }
+    }
+    for (const tid of Array.from(this._inFlightMap.keys())) {
+      const s = liveByActive.get(tid);
+      // Gone from any turn (shouldn't happen, but defensive) or terminal: drop.
+      if (s == null || TERMINAL.has(s)) {
+        this._removeInFlight(tid);
+      }
     }
   }
 
