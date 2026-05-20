@@ -232,11 +232,19 @@ export function renderToolCard(initial) {
 
   // Tick the duration label while the call is running so the user sees
   // elapsed time live (every 500ms is enough; cheap and aligned with the
-  // SSE token throttle).
-  const durTimer = setInterval(() => {
-    if (endedAt) { clearInterval(durTimer); return; }
-    durEl.textContent = fmtDur(Date.now() - startedAt) + '…';
-  }, 500);
+  // SSE token throttle). Skip the timer entirely when the initial payload
+  // is already terminal — no reason to tick a long-finished history pill.
+  let durTimer = null;
+  const isTerminal = (status === 'Completed' || status === 'Failed' || status === 'Canceled');
+  if (isTerminal) {
+    endedAt = startedAt; // unknown duration for replayed terminal calls
+    durEl.textContent = '';
+  } else {
+    durTimer = setInterval(() => {
+      if (endedAt) { clearInterval(durTimer); durTimer = null; return; }
+      durEl.textContent = fmtDur(Date.now() - startedAt) + '…';
+    }, 500);
+  }
 
   function setStatus(canonical) {
     const info = STATUS_STYLES[canonical] || styleInfo;
@@ -244,7 +252,7 @@ export function renderToolCard(initial) {
     statusEl.textContent = info.label;
     if ((canonical === 'Completed' || canonical === 'Failed' || canonical === 'Canceled') && !endedAt) {
       endedAt = Date.now();
-      clearInterval(durTimer);
+      if (durTimer) { clearInterval(durTimer); durTimer = null; }
       durEl.textContent = fmtDur(endedAt - startedAt);
     }
   }

@@ -1004,7 +1004,14 @@ export class ChatView {
     // Stay pinned to the bottom only when the user hasn't scrolled away.
     // Force-scroll on explicit actions (sending a message, initial load).
     if (!(opts && opts.force) && this._autoScroll === false) return;
-    this.streamEl.scrollTop = this.streamEl.scrollHeight;
+    // Coalesce: scrollHeight access forces synchronous layout. During
+    // streaming many handlers call this back-to-back; rAF batches them
+    // to one layout per frame.
+    if (this._scrollRaf) return;
+    this._scrollRaf = requestAnimationFrame(() => {
+      this._scrollRaf = 0;
+      this.streamEl.scrollTop = this.streamEl.scrollHeight;
+    });
   }
 
   // Auto-scroll state machine: pinned to bottom by default; user scrolling

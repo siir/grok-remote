@@ -860,6 +860,12 @@ body::before {
   gap: 8px;
   padding-bottom: 10px;
   border-bottom: 1px dashed var(--border);
+  /* Skip rendering off-screen turns so a long history doesn't force the
+     browser to lay out the whole conversation on every keystroke. The
+     contain-intrinsic-size is a rough placeholder height so the scrollbar
+     stays accurate while the browser holds off rendering. */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 240px;
 }
 
 /* message bubbles */
@@ -1174,6 +1180,13 @@ body::before {
   overflow-y: auto;
   outline: none;
   transition: border-color 0.15s;
+  /* contain keeps the textarea's input handling isolated from the rest of
+     the conversation pane so each keystroke doesn't trigger layout work
+     across hundreds of turns above. */
+  contain: layout style;
+}
+.composer {
+  contain: layout style;
 }
 .composer-input:focus { border-color: var(--teal); }
 .composer-input:disabled {
