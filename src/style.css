@@ -6892,3 +6892,38 @@ body::before {
   max-height: 160px;
   overflow: auto;
 }
+
+/* Always-visible output snippet on the closed sub-agent card */
+.flow-subagent-node__snippet {
+  margin: 6px 10px 8px;
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  background: rgba(121, 192, 255, 0.04);
+  border-left: 2px solid rgba(121, 192, 255, 0.35);
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flow-subagent-node__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.flow-subagent-node__stats > span {
+  padding: 2px 8px;
+  border: 1px solid rgba(121, 192, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(121, 192, 255, 0.05);
+}
+.flow-subagent-node__id {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--dim);
+  margin-top: 4px;
+}

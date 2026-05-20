@@ -98,7 +98,7 @@ const NODE_HEIGHTS = {
   agent:      { closed: 135, open: 135 },     // no expand
   tool:       { closed: 42,  open: 280 },     // closed pill, open body with input/output
   group:      { closed: 56,  open: 56 },      // group head; child rows are tallied separately
-  subAgent:   { closed: 112, open: 280 },     // crumb + head + row; expanded shows prompt/response
+  subAgent:   { closed: 138, open: 340 },     // crumb + head + row + snippet; expanded shows prompt/response/stats
   bgTask:     { closed: 78,  open: 78 },      // bg cards never expand right now
   milestone:  { closed: 50,  open: 50 },      // tiny pill
 };
@@ -346,9 +346,23 @@ function SubAgentNode({ data }) {
   const promptText = typeof data.prompt === 'string'
     ? data.prompt
     : (data.prompt ? safeStringify(data.prompt) : '');
-  const responseText = Array.isArray(data.response)
+  // Prefer the rich SubagentCompleted rawOutput.output as the canonical final
+  // response (it's the actual subagent message). Fall back to the streamed
+  // content blocks if rawOutput hasn't arrived yet.
+  const ro = data.rawOutput;
+  const isSubagentFinal = ro && ro.type === 'SubagentCompleted';
+  const finalOutput = isSubagentFinal && typeof ro.output === 'string' ? ro.output.trim() : '';
+  const streamedText = Array.isArray(data.response)
     ? data.response.map(c => c.text).join('\n').trim()
     : (typeof data.response === 'string' ? data.response : '');
+  const responseText = finalOutput || streamedText;
+  // Snippet for the closed card: first non-empty line, capped.
+  const snippet = (() => {
+    const t = responseText || '';
+    if (!t) return '';
+    const firstLine = t.split('\n').find(l => l.trim()) || '';
+    return firstLine.length > 90 ? firstLine.slice(0, 87) + '...' : firstLine;
+  })();
 
   return (
     <div
@@ -375,6 +389,11 @@ function SubAgentNode({ data }) {
         </span>
         {showDur && <span className="flow-subagent-node__dur">{showDur}</span>}
       </div>
+      {snippet && (
+        <div className="flow-subagent-node__snippet" title={responseText}>
+          {snippet}
+        </div>
+      )}
       {open && (
         <div className="flow-subagent-node__body">
           {promptText && (
@@ -385,8 +404,24 @@ function SubAgentNode({ data }) {
           )}
           {responseText && (
             <div className="flow-subagent-node__section">
-              <div className="flow-subagent-node__section-title">response</div>
+              <div className="flow-subagent-node__section-title">{isSubagentFinal ? 'final output' : 'response'}</div>
               <pre className="flow-subagent-node__pre">{responseText}</pre>
+            </div>
+          )}
+          {isSubagentFinal && (
+            <div className="flow-subagent-node__section">
+              <div className="flow-subagent-node__section-title">stats</div>
+              <div className="flow-subagent-node__stats">
+                {typeof ro.tool_calls === 'number' && <span>{ro.tool_calls} tool call{ro.tool_calls === 1 ? '' : 's'}</span>}
+                {typeof ro.turns === 'number' && <span>{ro.turns} turn{ro.turns === 1 ? '' : 's'}</span>}
+                {typeof ro.duration_ms === 'number' && <span>{fmtDuration(ro.duration_ms)}</span>}
+                {typeof ro.subagent_type === 'string' && <span>{ro.subagent_type}</span>}
+              </div>
+              {typeof ro.subagent_id === 'string' && (
+                <div className="flow-subagent-node__id" title={ro.subagent_id}>
+                  id: {ro.subagent_id.slice(0, 18)}...
+                </div>
+              )}
             </div>
           )}
           {!promptText && !responseText && (
@@ -635,6 +670,7 @@ function applyAgentEventToState(cur, name, payload, opts) {
             status,
             prompt,
             response: u.content ? extractToolContent(u.content) : [],
+            rawOutput: u.rawOutput || null,
             toolCalls: [],
             rawInput: u.rawInput || null,
             startedAt: at,
@@ -647,12 +683,26 @@ function applyAgentEventToState(cur, name, payload, opts) {
         const newContent = u.content
           ? mergeToolContent(prev.response, extractToolContent(u.content))
           : prev.response;
+        // The spawn_subagent tool itself can report status=Completed the
+        // moment it spawns the child (especially in run_in_background mode),
+        // while the actual child is still doing its work. Treat the sub-agent
+        // as truly completed only when we see a SubagentCompleted rawOutput
+        // (the agent's signal for "the subagent finished and here is its
+        // final output"). For inline runs, Completed + rawOutput arrive
+        // together so this still picks them up. Failed/canceled still flow
+        // through immediately.
+        const ro = u.rawOutput || null;
+        const isSubagentFinal = ro && ro.type === 'SubagentCompleted';
+        const isHardTerminal = (status === 'Failed' || status === 'canceled');
+        const reallyDone = isSubagentFinal || isHardTerminal;
+        const effectiveStatus = (status === 'Completed' && !isSubagentFinal && !prev.endedAt)
+          ? 'Running' : status;
         let ms = (next.milestones || []).slice();
-        if (done && !prev.endedAt) {
+        if (reallyDone && !prev.endedAt) {
           ms.push({
             kind: status === 'Failed' ? 'sub-agent-fail' : 'sub-agent-end',
             icon: 'S',
-            label: `sub-agent ${String(status).toLowerCase()}: ${truncCmd(prev.label)}`,
+            label: `sub-agent ${isSubagentFinal ? 'completed' : String(status).toLowerCase()}: ${truncCmd(prev.label)}`,
             t: at,
           });
           if (ms.length > MILESTONE_CAP) ms = ms.slice(ms.length - MILESTONE_CAP);
@@ -661,10 +711,11 @@ function applyAgentEventToState(cur, name, payload, opts) {
           ...prev,
           kind: u.kind || prev.kind,
           label: pickSubAgentLabel(u) || prev.label,
-          status,
+          status: effectiveStatus,
           rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
+          rawOutput: ro || prev.rawOutput || null,
           response: newContent,
-          endedAt: done ? (prev.endedAt || at) : prev.endedAt,
+          endedAt: reallyDone ? (prev.endedAt || at) : prev.endedAt,
         };
         const nextSubs = subs.slice();
         nextSubs[subIdx] = merged;
@@ -1205,6 +1256,7 @@ function FlowInner({ filterIds = null }) {
                 status: sub.status,
                 prompt: sub.prompt,
                 response: sub.response,
+                rawOutput: sub.rawOutput || null,
                 startedAt: sub.startedAt,
                 endedAt: sub.endedAt,
                 parentName: agentNode.data.name,
