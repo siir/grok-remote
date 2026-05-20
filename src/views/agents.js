@@ -222,6 +222,19 @@ export class AgentsSidebar {
       es.addEventListener('agent_removed', onMutation);
       es.addEventListener('agent_updated', onMutation);
       es.addEventListener('agent_status',  onMutation);
+      // Token deltas are high-frequency during streaming; patch in-place
+      // and re-render the affected row instead of round-tripping a refresh.
+      es.addEventListener('agent_tokens', (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          if (!d || !d.id || typeof d.totalTokens !== 'number') return;
+          const idx = this.agents.findIndex(a => a && a.id === d.id);
+          if (idx < 0) return;
+          this.agents[idx] = { ...this.agents[idx], totalTokens: d.totalTokens };
+          this.renderList();
+          document.dispatchEvent(new CustomEvent('grok-remote:agents-refresh', { detail: this.agents }));
+        } catch { /* ignore */ }
+      });
       es.addEventListener('error', () => { this._sseAlive = false; });
       apply();
     } catch {
