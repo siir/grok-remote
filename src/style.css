@@ -6354,6 +6354,187 @@ body::before {
   letter-spacing: 0.06em;
 }
 
+/* ── Flow settings panel ────────────────────────────────────────────────
+   Right-side overlay (sits to the LEFT of the stats panel when both are
+   open). Owns its own pointer events so React Flow doesn't grab gestures
+   from inside the panel. */
+.flow-toolbar__gear {
+  /* Inherit topbar-icon-btn base; just give it a hover ring matching the
+     other toolbar pill buttons. */
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.flow-toolbar__gear--on { color: var(--teal); }
+
+.flow-settings {
+  position: absolute;
+  /* Sit to the left of the stats panel if it's also open (width 320 + 12
+     pad + 12 gap = 344). When the stats panel is closed the canvas reflow
+     handles itself; the panels never overlap by accident because both are
+     fixed-width. */
+  right: 12px;
+  top: 12px;
+  bottom: 12px;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 21, 28, 0.94);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--mono);
+  color: var(--text);
+  z-index: 6;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  overflow: hidden;
+  pointer-events: auto;
+}
+.flow-stats + .flow-settings,
+.flow-canvas .flow-stats ~ .flow-settings {
+  /* When stats is open it sits at right:12, width 320. Shift the settings
+     panel to its left to avoid overlap. */
+  right: calc(12px + 320px + 12px);
+}
+.flow-settings__head {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex: 0 0 auto;
+}
+.flow-settings__title {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--teal);
+  flex: 1 1 auto;
+}
+.flow-settings__close {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  padding: 0;
+}
+.flow-settings__close:hover { color: var(--red); border-color: var(--red); }
+.flow-settings__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0;
+}
+.flow-settings__section {
+  padding: 10px 12px 12px;
+  border-bottom: 1px dashed var(--border);
+}
+.flow-settings__section:last-child { border-bottom: none; }
+.flow-settings__section--footer { padding-top: 12px; padding-bottom: 12px; }
+.flow-settings__section-title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.flow-settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  padding: 4px 0;
+  min-height: 24px;
+}
+.flow-settings__row--toggle { cursor: pointer; }
+.flow-settings__row--slider { flex-direction: column; align-items: stretch; gap: 4px; }
+.flow-settings__row--actions { justify-content: flex-end; padding-top: 6px; }
+.flow-settings__row--disabled { opacity: 0.45; pointer-events: none; }
+.flow-settings__label {
+  color: var(--muted);
+  flex: 1 1 auto;
+  font-size: 11.5px;
+}
+.flow-settings__check { accent-color: var(--teal); cursor: pointer; }
+.flow-settings__select,
+.flow-settings__num {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 3px 6px;
+  min-width: 100px;
+}
+.flow-settings__num {
+  width: 70px;
+  min-width: 0;
+  text-align: right;
+}
+.flow-settings__select:focus,
+.flow-settings__num:focus {
+  outline: none;
+  border-color: var(--teal);
+}
+.flow-settings__slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.flow-settings__slider {
+  flex: 1 1 auto;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+.flow-settings__slider-val {
+  font-variant-numeric: tabular-nums;
+  color: var(--teal);
+  font-size: 11px;
+  min-width: 50px;
+  text-align: right;
+}
+.flow-settings__slider-unit {
+  color: var(--dim);
+  margin-left: 2px;
+  font-size: 10px;
+}
+.flow-settings__num-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.flow-settings__btn {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.flow-settings__btn:hover:not(:disabled) {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.flow-settings__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.flow-settings__btn--danger {
+  width: 100%;
+  border-color: var(--border);
+}
+.flow-settings__btn--danger:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 /* Make sure expanded grouped tool nodes still respect node spacing. */
 .flow-tool-node-wrap--grouped .flow-tool-node {
   border-style: dashed;

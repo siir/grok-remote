@@ -34,6 +34,7 @@ import dagre from 'dagre';
 
 import { api } from '../../lib/api.js';
 import { fmtTokens } from '../../lib/format.js';
+import { iconHtml } from '../../lib/icons.js';
 
 // How often we re-poll the agent list. SSE keeps individual cards live; this
 // is only here to pick up newly-spawned or deleted agents.
@@ -216,6 +217,58 @@ const GROUP_CHILD_ROW_OPEN = 280;
 // in a short burst.
 const MILESTONE_STEP_X = 220;
 const MILESTONE_ROW_DY = 32;
+
+// ── persisted view settings ─────────────────────────────────────────────────
+//
+// Everything below is configurable from the gear panel in the toolbar. The
+// defaults here MUST keep the canvas looking identical to the pre-settings
+// behaviour, so a user who never touches the panel sees the original layout.
+// The whole object is round-tripped through localStorage on every change.
+const FLOW_SETTINGS_KEY = 'grok-remote.flow.settings';
+const DEFAULT_FLOW_SETTINGS = Object.freeze({
+  // Layout
+  direction:         'LR',  // dagre rankdir: LR | TB | RL | BT
+  rankSpacing:       80,    // dagre ranksep
+  nodeSpacing:       30,    // dagre nodesep
+  // Display
+  showMilestones:    true,
+  showStats:         null,  // tri-state: null means "follow built-in default"
+  showBgTasks:       true,
+  showSubAgents:     true,
+  showToolCalls:     true,
+  showGroups:        true,
+  groupThreshold:    3,     // runLen at or above which we collapse same-kind tools
+  // Interaction
+  nodesDraggable:    true,
+  panOnDrag:         true,
+  zoomOnScroll:      true,
+  snapToGrid:        false,
+  snapGridSize:      15,
+  // Animation
+  autoFitOnExpand:   true,
+  edgeAnimations:    true,
+  animationDuration: 250,
+});
+
+function loadFlowSettings() {
+  try {
+    const raw = localStorage.getItem(FLOW_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_FLOW_SETTINGS };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_FLOW_SETTINGS };
+    return { ...DEFAULT_FLOW_SETTINGS, ...parsed };
+  } catch {
+    return { ...DEFAULT_FLOW_SETTINGS };
+  }
+}
+
+function saveFlowSettings(s) {
+  try { localStorage.setItem(FLOW_SETTINGS_KEY, JSON.stringify(s)); } catch { /* quota or disabled */ }
+}
+
+function clearFlowSettings() {
+  try { localStorage.removeItem(FLOW_SETTINGS_KEY); } catch { /* ignore */ }
+}
 
 // Backoff schedule for sub-agent child trace retries. Used when the session
 // dir hasn't been flushed to disk yet (brand-new bg sub-agents). The
@@ -633,8 +686,10 @@ function layoutAgents(agents) {
 // runs into groups. A run is two-or-more consecutive calls of identical
 // `kind` where the gap between (prev.endedAt || prev.startedAt) and
 // next.startedAt is under GROUP_GAP_MS. Single calls stay as individual
-// tool entries.
-function groupToolCalls(sortedCalls) {
+// tool entries. `threshold` is the minimum runLen to fold into a group
+// (default 3). Pass Infinity to disable grouping entirely.
+function groupToolCalls(sortedCalls, threshold = 3) {
+  const minRun = Number.isFinite(threshold) && threshold >= 2 ? threshold : Infinity;
   const out = [];
   let i = 0;
   while (i < sortedCalls.length) {
@@ -651,7 +706,7 @@ function groupToolCalls(sortedCalls) {
       j++;
     }
     const runLen = j - i;
-    if (runLen >= 3) {
+    if (runLen >= minRun) {
       const items = sortedCalls.slice(i, j);
       const totalMs = items.reduce((acc, c) => {
         const e = c.endedAt || (c.startedAt ? Date.now() : 0);
@@ -1047,7 +1102,18 @@ function FlowInner({ filterIds = null }) {
   // id present in this map at its dragged x/y; auto-layout wins for
   // everything else.
   const [userPositions, setUserPositions] = useState({}); // nodeId -> {x, y}
-  const [statsOpen, setStatsOpen]         = useState(hasFilter); // open by default in scoped view
+  // Persisted view settings (gear panel). Loaded once from localStorage on
+  // mount; every mutation writes the whole object back. See
+  // DEFAULT_FLOW_SETTINGS at the top of the file for the schema + defaults.
+  const [settings, setSettings] = useState(() => loadFlowSettings());
+  // The settings panel's open/closed state is intentionally NOT persisted:
+  // the panel is a transient affordance, like the stats panel.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // statsOpen mirrors settings.showStats when the user has explicitly toggled
+  // it via the gear panel, otherwise falls back to the "open in scoped view"
+  // default. Updates flow both ways: toolbar button + settings checkbox.
+  const initialStatsOpen = (settings.showStats == null) ? hasFilter : !!settings.showStats;
+  const [statsOpen, setStatsOpen]         = useState(initialStatsOpen);
   const [tick, setTick]                   = useState(0); // forces re-render of live durations
   // Per-sub-agent child trace state. Keyed by `${agentId}:${subId}`. Value is
   // { status: 'loading'|'loaded'|'error', calls: [...], error?: string,
@@ -1089,6 +1155,43 @@ function FlowInner({ filterIds = null }) {
   // final retries then give up).
   const agentStateRef = useRef({});
   useEffect(() => { agentStateRef.current = agentState; }, [agentState]);
+
+  // Mirror the latest settings into a ref so closures (fitView callbacks,
+  // event handlers wired through useCallback) can read the current
+  // animationDuration without being recreated on every settings change.
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  // Helper used by every settings control. Patches the settings object and
+  // mirrors it to localStorage in one shot. Accepts either a partial object
+  // or an updater function.
+  const updateSettings = useCallback((patch) => {
+    setSettings((cur) => {
+      const next = typeof patch === 'function' ? patch(cur) : { ...cur, ...patch };
+      saveFlowSettings(next);
+      return next;
+    });
+  }, []);
+
+  // Reset every setting to its default + clear the localStorage key so the
+  // next mount picks up defaults from scratch.
+  const resetSettings = useCallback(() => {
+    clearFlowSettings();
+    setSettings({ ...DEFAULT_FLOW_SETTINGS });
+    // Sync the stats panel back to the built-in default (open in scoped
+    // view, closed otherwise).
+    setStatsOpen(hasFilter);
+  }, [hasFilter]);
+
+  // Keep settings.showStats in sync when the user clicks the toolbar
+  // "stats" button. Avoids the panel and the toolbar drifting apart.
+  const toggleStats = useCallback(() => {
+    setStatsOpen((v) => {
+      const next = !v;
+      updateSettings({ showStats: next });
+      return next;
+    });
+  }, [updateSettings]);
 
   // Keep latest values reachable inside polling closures without retriggering.
   const showArchivedRef = useRef(showArchived);
@@ -1365,7 +1468,9 @@ function FlowInner({ filterIds = null }) {
     // Defer a small fit so the newly-revealed children stay on screen.
     if (expandFitTimerRef.current) cancelAnimationFrame(expandFitTimerRef.current);
     expandFitTimerRef.current = requestAnimationFrame(() => {
-      try { fitView({ padding: 0.15, duration: 250 }); } catch { /* ignore */ }
+      const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
+      if (!s.autoFitOnExpand) return;
+      try { fitView({ padding: 0.15, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
     });
   }, [fitView]);
 
@@ -1550,7 +1655,9 @@ function FlowInner({ filterIds = null }) {
     }
     if (expandFitTimerRef.current) cancelAnimationFrame(expandFitTimerRef.current);
     expandFitTimerRef.current = requestAnimationFrame(() => {
-      try { fitView({ padding: 0.15, duration: 250 }); } catch { /* ignore */ }
+      const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
+      if (!s.autoFitOnExpand) return;
+      try { fitView({ padding: 0.15, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
     });
   }, [fitView, fetchSubChildren]);
 
@@ -1567,7 +1674,8 @@ function FlowInner({ filterIds = null }) {
     setUserPositions({});
     if (expandFitTimerRef.current) cancelAnimationFrame(expandFitTimerRef.current);
     expandFitTimerRef.current = requestAnimationFrame(() => {
-      try { fitView({ padding: 0.2, duration: 300 }); } catch { /* ignore */ }
+      const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
+      try { fitView({ padding: 0.2, duration: s.animationDuration ?? 300 }); } catch { /* ignore */ }
     });
   }, [fitView]);
 
@@ -1610,7 +1718,7 @@ function FlowInner({ filterIds = null }) {
       if (!st) return;
 
       // --- Sub-agents (hang off the LEFT of the parent) ---
-      if (Array.isArray(st.subAgents) && st.subAgents.length) {
+      if (settings.showSubAgents && Array.isArray(st.subAgents) && st.subAgents.length) {
         const subs = st.subAgents
           .slice()
           .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
@@ -1673,7 +1781,9 @@ function FlowInner({ filterIds = null }) {
           });
 
           // --- Child tool calls under an expanded sub-agent ---
-          if (isOpen && childEntry && childEntry.status === 'loaded' && childEntry.calls.length > 0) {
+          // Skip these when the user toggled off "show tool calls" so the
+          // sub-agent card still shows but its tool fan-out vanishes.
+          if (settings.showToolCalls && isOpen && childEntry && childEntry.status === 'loaded' && childEntry.calls.length > 0) {
             childEntry.calls.forEach((call) => {
               const childId = `subtool:${agentNode.data.agentId}:${sub.id}:${call.id}`;
               const childOpen = expandedNodes.has(childId);
@@ -1720,12 +1830,18 @@ function FlowInner({ filterIds = null }) {
       }
 
       // --- Tool calls + grouping ---
-      if (st.calls && Object.keys(st.calls).length) {
+      if (settings.showToolCalls && st.calls && Object.keys(st.calls).length) {
         const sortedCalls = Object.values(st.calls).slice().sort((a, b) => {
           const at = a.startedAt || 0, bt = b.startedAt || 0;
           return at - bt;
         });
-        const items = groupToolCalls(sortedCalls);
+        // When showGroups is off, pass Infinity so groupToolCalls keeps
+        // every call as an individual entry. Otherwise honour the
+        // user-configured threshold (default 3).
+        const threshold = settings.showGroups
+          ? (Number.isFinite(settings.groupThreshold) && settings.groupThreshold >= 2 ? settings.groupThreshold : 3)
+          : Infinity;
+        const items = groupToolCalls(sortedCalls, threshold);
         items.forEach((entry) => {
           if (entry.type === 'group') {
             const groupKey = `${entry.kind}@${entry.startedAt}`;
@@ -1842,7 +1958,7 @@ function FlowInner({ filterIds = null }) {
       }
 
       // --- Background-task nodes ---
-      if (Array.isArray(st.bgTerminals) && st.bgTerminals.length) {
+      if (settings.showBgTasks && Array.isArray(st.bgTerminals) && st.bgTerminals.length) {
         // Show running first, then a few most-recent exited.
         const running = st.bgTerminals.filter(t => !t.exited);
         const exited  = st.bgTerminals.filter(t => t.exited);
@@ -1883,7 +1999,7 @@ function FlowInner({ filterIds = null }) {
       }
 
       // --- Milestone strip (deferred; placed after dagre runs) ---
-      if (Array.isArray(st.milestones) && st.milestones.length) {
+      if (settings.showMilestones && Array.isArray(st.milestones) && st.milestones.length) {
         const strip = st.milestones
           .slice(-MILESTONE_CAP)
           .slice()
@@ -1912,6 +2028,8 @@ function FlowInner({ filterIds = null }) {
       sigParts.push(`${n.id}|${n.type}|${open ? 1 : 0}`);
     }
     for (const e of auxEdges) sigParts.push(`E:${e.source}->${e.target}`);
+    // Bust the layout cache whenever a dagre-affecting setting changes.
+    sigParts.push(`L:${settings.direction}|${settings.rankSpacing}|${settings.nodeSpacing}`);
     const sig = sigParts.join(',');
 
     let positions; // Map<nodeId, {x,y}>
@@ -1926,9 +2044,9 @@ function FlowInner({ filterIds = null }) {
     } else {
       const g = new dagre.graphlib.Graph({ compound: false });
       g.setGraph({
-        rankdir: 'LR',
-        nodesep: 30,
-        ranksep: 80,
+        rankdir: settings.direction || 'LR',
+        nodesep: Number.isFinite(settings.nodeSpacing) ? settings.nodeSpacing : 30,
+        ranksep: Number.isFinite(settings.rankSpacing) ? settings.rankSpacing : 80,
         marginx: 20,
         marginy: 20,
       });
@@ -2021,8 +2139,22 @@ function FlowInner({ filterIds = null }) {
       if (pos) n.position = pos;
     }
 
-    return { nodes: allNodes, edges: auxEdges };
-  }, [agents, agentState, hasFilter, showAll, filterIds, expandedGroups, expandedNodes, userPositions, toggleGroup, toggleNode, tick, subagentChildren]);
+    // Prune any edges whose endpoints no longer exist (e.g. user toggled
+    // off "show bg-task nodes" so the bg-target edge is now orphaned). Also
+    // strip the dashed animation when the setting is off.
+    const nodeIds = new Set(allNodes.map(n => n.id));
+    const finalEdges = [];
+    for (const e of auxEdges) {
+      if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+      if (settings.edgeAnimations) {
+        finalEdges.push(e);
+      } else {
+        finalEdges.push({ ...e, animated: false });
+      }
+    }
+
+    return { nodes: allNodes, edges: finalEdges };
+  }, [agents, agentState, hasFilter, showAll, filterIds, expandedGroups, expandedNodes, userPositions, toggleGroup, toggleNode, tick, subagentChildren, settings]);
 
   // ── handlers ───────────────────────────────────────────────────────────
 
@@ -2036,7 +2168,8 @@ function FlowInner({ filterIds = null }) {
   }, []);
 
   const handleFit = useCallback(() => {
-    try { fitView({ padding: 0.2, duration: 250 }); } catch { /* ignore */ }
+    const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
+    try { fitView({ padding: 0.2, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
   }, [fitView]);
 
   // Auto-fit whenever the visible agent set changes (spawn, archive,
@@ -2049,7 +2182,8 @@ function FlowInner({ filterIds = null }) {
     prevAgentIdsRef.current = sig;
     if (!agents.length) return;
     const raf = requestAnimationFrame(() => {
-      try { fitView({ padding: 0.2, duration: 250 }); } catch { /* ignore */ }
+      const s = settingsRef.current || DEFAULT_FLOW_SETTINGS;
+      try { fitView({ padding: 0.2, duration: s.animationDuration ?? 250 }); } catch { /* ignore */ }
     });
     return () => cancelAnimationFrame(raf);
   }, [agents, fitView]);
@@ -2075,11 +2209,20 @@ function FlowInner({ filterIds = null }) {
         <button
           type="button"
           className={`flow-toolbar__btn${statsOpen ? ' flow-toolbar__btn--on' : ''}`}
-          onClick={() => setStatsOpen(v => !v)}
+          onClick={toggleStats}
           title="toggle stats panel"
         >
           stats
         </button>
+        <button
+          type="button"
+          className={`flow-toolbar__gear topbar-icon-btn${settingsOpen ? ' flow-toolbar__gear--on' : ''}`}
+          onClick={() => setSettingsOpen(v => !v)}
+          title="flow settings"
+          aria-label="flow settings"
+          aria-pressed={settingsOpen}
+          dangerouslySetInnerHTML={{ __html: iconHtml('settings') }}
+        />
         {hasFilter && (
           <button
             type="button"
@@ -2113,7 +2256,15 @@ function FlowInner({ filterIds = null }) {
               nodeTypes={NODE_TYPES}
               onNodeClick={onNodeClick}
               onNodeDragStop={onNodeDragStop}
-              nodesDraggable
+              nodesDraggable={settings.nodesDraggable !== false}
+              nodesConnectable={false}
+              panOnDrag={settings.panOnDrag !== false}
+              zoomOnScroll={settings.zoomOnScroll !== false}
+              snapToGrid={!!settings.snapToGrid}
+              snapGrid={[
+                Number.isFinite(settings.snapGridSize) ? settings.snapGridSize : 15,
+                Number.isFinite(settings.snapGridSize) ? settings.snapGridSize : 15,
+              ]}
               fitView
               proOptions={{ hideAttribution: true }}
               minZoom={0.3}
@@ -2128,8 +2279,20 @@ function FlowInner({ filterIds = null }) {
                 agents={agents}
                 agentState={agentState}
                 subagentChildren={subagentChildren}
-                onClose={() => setStatsOpen(false)}
+                onClose={toggleStats}
                 tick={tick}
+              />
+            )}
+            {settingsOpen && (
+              <FlowSettingsPanel
+                settings={settings}
+                statsOpen={statsOpen}
+                onChange={updateSettings}
+                onClose={() => setSettingsOpen(false)}
+                onResetLayout={resetLayout}
+                onResetAll={resetSettings}
+                onToggleStats={toggleStats}
+                canResetLayout={Object.keys(userPositions).length > 0}
               />
             )}
           </>
@@ -2538,6 +2701,261 @@ function Counter({ label, value }) {
     <div className="flow-stats__counter">
       <div className="flow-stats__counter-val">{value == null || value === 0 ? '0' : value}</div>
       <div className="flow-stats__counter-key">{label}</div>
+    </div>
+  );
+}
+
+// ── settings panel ──────────────────────────────────────────────────────────
+//
+// Right-side overlay (mirrors FlowStatsPanel placement) that exposes every
+// DEFAULT_FLOW_SETTINGS knob. Each control calls onChange with a partial
+// patch; FlowInner.updateSettings merges + persists to localStorage.
+function FlowSettingsPanel({
+  settings,
+  statsOpen,
+  onChange,
+  onClose,
+  onResetLayout,
+  onResetAll,
+  onToggleStats,
+  canResetLayout,
+}) {
+  return (
+    <aside
+      className="flow-settings"
+      role="complementary"
+      aria-label="flow settings"
+      // Stop pan/zoom gestures inside the panel from being interpreted as
+      // canvas pan/zoom. The panel sits over .flow-canvas; without this
+      // React Flow grabs the mousedown.
+      onMouseDownCapture={(e) => e.stopPropagation()}
+      onWheelCapture={(e) => e.stopPropagation()}
+    >
+      <header className="flow-settings__head">
+        <h3 className="flow-settings__title">flow settings</h3>
+        <button
+          type="button"
+          className="flow-settings__close"
+          onClick={onClose}
+          title="close settings panel"
+          aria-label="close"
+        >x</button>
+      </header>
+
+      <div className="flow-settings__body">
+        <section className="flow-settings__section">
+          <div className="flow-settings__section-title">Layout</div>
+          <div className="flow-settings__row">
+            <label className="flow-settings__label" htmlFor="flow-set-dir">Direction</label>
+            <select
+              id="flow-set-dir"
+              className="flow-settings__select"
+              value={settings.direction}
+              onChange={(e) => onChange({ direction: e.target.value })}
+            >
+              <option value="LR">left to right</option>
+              <option value="TB">top to bottom</option>
+              <option value="RL">right to left</option>
+              <option value="BT">bottom to top</option>
+            </select>
+          </div>
+          <SliderRow
+            id="flow-set-ranksep"
+            label="Rank spacing"
+            min={40} max={200} step={5}
+            value={settings.rankSpacing}
+            onChange={(v) => onChange({ rankSpacing: v })}
+            suffix="px"
+          />
+          <SliderRow
+            id="flow-set-nodesep"
+            label="Node spacing"
+            min={10} max={100} step={2}
+            value={settings.nodeSpacing}
+            onChange={(v) => onChange({ nodeSpacing: v })}
+            suffix="px"
+          />
+          <div className="flow-settings__row flow-settings__row--actions">
+            <button
+              type="button"
+              className="flow-settings__btn"
+              onClick={onResetLayout}
+              disabled={!canResetLayout}
+              title="snap every dragged node back to the auto-computed position"
+            >Reset layout</button>
+          </div>
+        </section>
+
+        <section className="flow-settings__section">
+          <div className="flow-settings__section-title">Display</div>
+          <ToggleRow
+            label="Show milestones strip"
+            checked={!!settings.showMilestones}
+            onChange={(v) => onChange({ showMilestones: v })}
+          />
+          <ToggleRow
+            label="Show stats panel"
+            checked={!!statsOpen}
+            onChange={() => onToggleStats()}
+          />
+          <ToggleRow
+            label="Show bg-task nodes"
+            checked={!!settings.showBgTasks}
+            onChange={(v) => onChange({ showBgTasks: v })}
+          />
+          <ToggleRow
+            label="Show sub-agent nodes"
+            checked={!!settings.showSubAgents}
+            onChange={(v) => onChange({ showSubAgents: v })}
+          />
+          <ToggleRow
+            label="Show tool calls"
+            checked={!!settings.showToolCalls}
+            onChange={(v) => onChange({ showToolCalls: v })}
+          />
+          <ToggleRow
+            label="Show tool groups"
+            checked={!!settings.showGroups}
+            onChange={(v) => onChange({ showGroups: v })}
+          />
+          <NumberRow
+            id="flow-set-group-thresh"
+            label="Group threshold"
+            min={2} max={20} step={1}
+            value={settings.groupThreshold}
+            onChange={(v) => onChange({ groupThreshold: v })}
+            disabled={!settings.showGroups}
+          />
+        </section>
+
+        <section className="flow-settings__section">
+          <div className="flow-settings__section-title">Interaction</div>
+          <ToggleRow
+            label="Nodes draggable"
+            checked={!!settings.nodesDraggable}
+            onChange={(v) => onChange({ nodesDraggable: v })}
+          />
+          <ToggleRow
+            label="Pan on drag"
+            checked={!!settings.panOnDrag}
+            onChange={(v) => onChange({ panOnDrag: v })}
+          />
+          <ToggleRow
+            label="Zoom on scroll"
+            checked={!!settings.zoomOnScroll}
+            onChange={(v) => onChange({ zoomOnScroll: v })}
+          />
+          <ToggleRow
+            label="Snap to grid"
+            checked={!!settings.snapToGrid}
+            onChange={(v) => onChange({ snapToGrid: v })}
+          />
+          <NumberRow
+            id="flow-set-snap-size"
+            label="Snap grid size"
+            min={5} max={50} step={1}
+            value={settings.snapGridSize}
+            onChange={(v) => onChange({ snapGridSize: v })}
+            disabled={!settings.snapToGrid}
+            suffix="px"
+          />
+        </section>
+
+        <section className="flow-settings__section">
+          <div className="flow-settings__section-title">Animation</div>
+          <ToggleRow
+            label="Auto-fit on expand"
+            checked={!!settings.autoFitOnExpand}
+            onChange={(v) => onChange({ autoFitOnExpand: v })}
+          />
+          <ToggleRow
+            label="Edge animations"
+            checked={!!settings.edgeAnimations}
+            onChange={(v) => onChange({ edgeAnimations: v })}
+          />
+          <SliderRow
+            id="flow-set-animdur"
+            label="Animation duration"
+            min={0} max={500} step={10}
+            value={settings.animationDuration}
+            onChange={(v) => onChange({ animationDuration: v })}
+            suffix="ms"
+          />
+        </section>
+
+        <section className="flow-settings__section flow-settings__section--footer">
+          <button
+            type="button"
+            className="flow-settings__btn flow-settings__btn--danger"
+            onClick={onResetAll}
+            title="clear localStorage + revert every setting to its default"
+          >Reset to defaults</button>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+function ToggleRow({ label, checked, onChange }) {
+  return (
+    <label className="flow-settings__row flow-settings__row--toggle">
+      <span className="flow-settings__label">{label}</span>
+      <input
+        type="checkbox"
+        className="flow-settings__check"
+        checked={!!checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    </label>
+  );
+}
+
+function SliderRow({ id, label, min, max, step, value, onChange, suffix }) {
+  const v = Number.isFinite(value) ? value : min;
+  return (
+    <div className="flow-settings__row flow-settings__row--slider">
+      <label className="flow-settings__label" htmlFor={id}>{label}</label>
+      <div className="flow-settings__slider-wrap">
+        <input
+          id={id}
+          type="range"
+          min={min}
+          max={max}
+          step={step || 1}
+          value={v}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="flow-settings__slider"
+        />
+        <span className="flow-settings__slider-val">
+          {v}{suffix ? <span className="flow-settings__slider-unit">{suffix}</span> : null}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function NumberRow({ id, label, min, max, step, value, onChange, suffix, disabled }) {
+  const v = Number.isFinite(value) ? value : min;
+  return (
+    <div className={`flow-settings__row flow-settings__row--num${disabled ? ' flow-settings__row--disabled' : ''}`}>
+      <label className="flow-settings__label" htmlFor={id}>{label}</label>
+      <div className="flow-settings__num-wrap">
+        <input
+          id={id}
+          type="number"
+          min={min}
+          max={max}
+          step={step || 1}
+          value={v}
+          disabled={!!disabled}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (Number.isFinite(n)) onChange(Math.max(min, Math.min(max, n)));
+          }}
+          className="flow-settings__num"
+        />
+        {suffix ? <span className="flow-settings__slider-unit">{suffix}</span> : null}
+      </div>
     </div>
   );
 }
