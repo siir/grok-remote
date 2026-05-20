@@ -274,16 +274,39 @@ body::before {
   min-height: 0;
 }
 .dashboard {
-  display: grid;
-  grid-template-columns: 280px 1fr;
-  grid-template-rows: 1fr;
-  grid-auto-rows: 0;
-  gap: 0;
+  display: flex;
+  flex-direction: row;
   width: 100%;
   height: 100%;
   min-height: 0;
   border-top: 1px solid var(--border);
 }
+.split-host {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.sidebar-pane {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.sidebar-pane > .sidebar { flex: 1 1 auto; min-height: 0; }
+.main-pane-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.main-pane-wrap > .main-pane { flex: 1 1 auto; min-height: 0; min-width: 0; }
+.split-host.sidebar-collapsed > .sidebar-pane { display: none; }
+.split-host.sidebar-collapsed > .main-pane-wrap { flex: 1 1 100%; }
 .main-pane {
   display: flex;
   flex-direction: column;
@@ -291,6 +314,18 @@ body::before {
   min-height: 0;
   background: var(--bg);
 }
+
+/* Split.js gutter (used by both the outer sidebar/main split and the inner
+   chat/tools-col split). Teal-on-hover to match the rest of the palette. */
+.gutter {
+  background-color: var(--border);
+  background-repeat: no-repeat;
+  background-position: 50%;
+  transition: background-color 0.15s;
+}
+.gutter:hover { background-color: var(--teal); }
+.gutter.gutter-horizontal { cursor: col-resize; }
+.gutter.gutter-vertical   { cursor: row-resize; }
 
 /* ── sidebar ─────────────────────────────────────────── */
 .sidebar {
@@ -1178,8 +1213,8 @@ body::before {
 }
 
 /* Two-column split inside the conversation pane: chat on the left,
-   tool calls on the right. The right column is resizable (drag handle)
-   and collapsible (header toggle), with state persisted to localStorage. */
+   tool calls on the right. Powered by Split.js (gutter rules live with the
+   outer split CSS above). State persisted to localStorage. */
 .chat-split {
   flex: 1;
   min-height: 0;
@@ -1191,25 +1226,14 @@ body::before {
   flex: 1 1 auto;
   min-width: 0;
 }
-.chat-split__handle {
-  flex: 0 0 5px;
-  cursor: col-resize;
-  background: var(--border);
-  opacity: 0.4;
-  transition: opacity 0.15s, background 0.15s;
-}
-.chat-split__handle:hover {
-  opacity: 1;
-  background: var(--teal);
-}
 .chat-tools-col {
-  flex: 0 0 var(--tools-col-width, 380px);
-  min-width: 220px;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   background: var(--bg);
   border-left: 1px solid var(--border);
   min-height: 0;
+  min-width: 0;
 }
 .chat-tools-col__head {
   display: flex;
@@ -1249,29 +1273,20 @@ body::before {
   min-height: 0;
 }
 
-/* Collapsed: only the header bar visible, rest hidden. The !important
-   here is a small but intentional safety net: the inline flex-basis
-   shouldn't ever land here (we switched to a CSS custom property), but
-   if a stale inline style sneaks back in for any reason, the collapsed
-   state still wins so the chat reclaims the freed space. */
-.chat-tools-col--collapsed {
-  flex: 0 0 36px !important;
-  min-width: 36px !important;
+/* Collapsed tools column: Split.js is destroyed; we collapse the column
+   to a thin strip that only shows the header (so the user can still find
+   the expand toggle). The chat-stream reclaims the rest. */
+.chat-split--tools-collapsed > .chat-stream {
+  flex: 1 1 auto;
+  min-width: 0;
 }
-.chat-tools-col--collapsed .chat-tools-col__title { display: none; }
-.chat-tools-col--collapsed .chat-tools-stream { display: none; }
-.chat-tools-col--collapsed .chat-tools-col__head { padding: 6px 4px; }
-
-/* Drag handle visually disabled when right column is collapsed. */
-.chat-split__handle:has(+ .chat-tools-col--collapsed) {
-  cursor: default;
-  background: var(--border);
-  opacity: 0.25;
+.chat-split--tools-collapsed > .chat-tools-col {
+  flex: 0 0 36px;
+  min-width: 36px;
 }
-.chat-split__handle:has(+ .chat-tools-col--collapsed):hover {
-  opacity: 0.5;
-  background: var(--border);
-}
+.chat-split--tools-collapsed > .chat-tools-col .chat-tools-col__title { display: none; }
+.chat-split--tools-collapsed > .chat-tools-col .chat-tools-stream { display: none; }
+.chat-split--tools-collapsed > .chat-tools-col .chat-tools-col__head { padding: 6px 4px; }
 
 /* Per-turn grouping in the tools column: a small header showing the
    user-message snippet that triggered this batch of tool calls. */
@@ -1293,16 +1308,19 @@ body::before {
   letter-spacing: 0.04em;
 }
 
-/* Mobile: stack the tools column below the chat (default collapsed) */
+/* Mobile: stack the tools column below the chat. Split.js doesn't
+   initialize at this breakpoint (see chat.js _isChatMobile), so any
+   inline flex-basis is overridden here to keep the stacked layout. */
 @media (max-width: 720px) {
   .chat-split {
     flex-direction: column;
   }
-  .chat-split__handle {
-    display: none;
+  .chat-split > .chat-stream {
+    flex: 1 1 auto !important;
+    min-width: 0;
   }
   .chat-tools-col {
-    flex: 0 0 auto;
+    flex: 0 0 auto !important;
     border-left: none;
     border-top: 1px solid var(--border);
     max-height: 40vh;
@@ -1914,11 +1932,8 @@ body::before {
 ::-webkit-scrollbar-thumb:hover { background: #2a3340; }
 
 /* ── responsive ──────────────────────────────────────── */
-@media (max-width: 720px) {
-  .dashboard {
-    grid-template-columns: 1fr;
-  }
-}
+/* (mobile dashboard layout overrides live with the .left-rail responsive
+   block lower down — keep the breakpoints there together.) */
 
 /* ===== files-tab ===== */
 .pane--files {
@@ -3775,105 +3790,20 @@ body::before {
 /* Each system page sub-agent appends to its own marker section below. */
 
 .dashboard--with-rail {
-  grid-template-columns: 68px var(--sidebar-width, 280px) 1fr;
-  /* Lock to a single row so children that escape grid flow (eg. an
-     absolutely-positioned helper added by JS) cannot create implicit
-     rows that push the topbar off-screen when columns shrink. */
-  grid-template-rows: 1fr;
-  grid-auto-rows: 0;
   position: relative;
 }
-.dashboard--with-rail.dashboard--sidebar-collapsed {
-  /* Collapsed: hardcoded 0 column. Do NOT reference --sidebar-width here
-     so a stale inline custom-prop on .dashboard cannot bring the sidebar
-     back. */
-  grid-template-columns: 68px 0 1fr;
-}
-.dashboard--sidebar-collapsed .sidebar {
-  display: none;
-}
-/* Defense in depth: hide the in-header toggle while the sidebar itself
-   is collapsed (the button lives inside .sidebar which is display:none,
-   but this keeps the rule self-evident). */
-.dashboard--sidebar-collapsed .sidebar-collapse-btn {
-  display: none;
-}
 
-/* Vertical handle on the sidebar/main seam: drag to resize, hover to
-   highlight. Lives on <body> with position: fixed so it can't perturb
-   the dashboard grid. */
-.sidebar-resize-handle {
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  width: 5px;
-  background: transparent;
-  cursor: col-resize;
-  z-index: 20;
-  transition: background 0.15s;
-}
-.sidebar-resize-handle:hover { background: var(--teal); opacity: 0.55; }
-
-/* Edge tab to reopen the sidebar after collapsing. Also fixed to viewport
-   so it's anchored to (left = rail width) regardless of grid changes.
-   Hover expands the hit area horizontally for easier clicking. */
-.sidebar-reopen-tab {
-  position: fixed;
-  top: 50%;
-  left: 68px;
-  transform: translateY(-50%);
-  z-index: 22;
-  width: 16px;
-  height: 56px;
-  background: var(--panel-2);
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 6px 6px 0;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 12px;
+/* Topbar "collapse sidebar" toggle. Mirrors the look of .topbar-btn but
+   sized for a single-glyph control. Hidden on mobile (the sidebar there
+   is the off-canvas drawer, which is driven by the hamburger). */
+.topbar-sidebar-toggle {
+  padding: 5px 8px;
+  font-size: 13px;
   line-height: 1;
-  transition: width 0.15s ease, color 0.15s, border-color 0.15s;
+  min-width: 28px;
 }
-.sidebar-reopen-tab:hover {
-  color: var(--teal);
-  border-color: var(--teal);
-  width: 22px;
-}
-.sidebar-reopen-tab[hidden] { display: none; }
-
-/* Header collapse button inside the sidebar (desktop only). */
-.sidebar-collapse-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-family: var(--mono);
-  font-size: 12px;
-  cursor: pointer;
-  line-height: 1;
-  margin-left: auto;
-}
-.sidebar-collapse-btn:hover { color: var(--teal); border-color: var(--teal); }
 @media (max-width: 720px) {
-  .sidebar-collapse-btn { display: none; }
-  .sidebar-resize-handle { display: none !important; }
-  .sidebar-reopen-tab { display: none !important; }
-  /* Make the desktop "collapsed" class a no-op on mobile so it can't
-     conflict with the off-canvas drawer flow (body[data-drawer-open]).
-     Mobile uses display:flex column on .dashboard, not grid, so the
-     grid-template-columns override below only matters if someone
-     re-enables grid layout at this breakpoint - safe either way. */
-  .dashboard--with-rail.dashboard--sidebar-collapsed {
-    grid-template-columns: 1fr;
-  }
-  .dashboard--sidebar-collapsed .sidebar {
-    /* Re-show the sidebar on mobile; the drawer transform handles
-       visibility instead. */
-    display: flex;
-  }
+  .topbar-sidebar-toggle { display: none !important; }
 }
 .left-rail {
   background: var(--bg);
@@ -3971,7 +3901,19 @@ body::before {
   color: var(--muted);
 }
 @media (max-width: 720px) {
-  .dashboard--with-rail { grid-template-columns: 1fr; }
+  .dashboard--with-rail { flex-direction: column; }
+  .split-host {
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .sidebar-pane {
+    display: contents;
+  }
+  .main-pane-wrap {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
   .left-rail {
     flex-direction: row;
     width: 100%;

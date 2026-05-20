@@ -11,6 +11,7 @@
 // Plus: available_commands_update, session_summary_generated,
 //       _x.ai/session_notification (toast), error (red banner).
 
+import Split from 'split.js';
 import { api } from '../lib/api.js';
 import { openStream } from '../lib/sse.js';
 import { mountFilesTab, unmountFilesTab } from './files.js';
@@ -53,7 +54,7 @@ export class ChatView {
     this.streamEl  = el('div', { class: 'chat-stream' });
     this.toolsColEl = el('div', { class: 'chat-tools-col' });
     this.toolsStreamEl = el('div', { class: 'chat-tools-stream' });
-    this._splitInit();
+    this._buildToolsColHeader();
     this.composerEl = this.buildComposer();
     this.tabsEl    = this.buildTabs();
     this.statusEl  = el('div', { class: 'chat-status' });
@@ -114,9 +115,8 @@ export class ChatView {
           this.bgTermsStripEl,
           this.convoSkillsStripEl,
           this.inFlightStripEl,
-          el('div', { class: 'chat-split' },
+          this.chatSplitEl = el('div', { class: 'chat-split' },
             this.streamEl,
-            this.splitHandleEl,
             this.toolsColEl,
           ),
           this.composerEl,
@@ -167,9 +167,16 @@ export class ChatView {
 
   mount(parent) {
     parent.appendChild(this.root);
+    // Split.js needs the panes to actually be in the DOM to read sizes,
+    // so we init the inner chat split here, not in the constructor.
+    // Tear down any previous instance first (mount is re-entrant when the
+    // user navigates between routes).
+    this._destroyChatSplit();
+    this._initChatSplit();
   }
 
   destroy() {
+    this._destroyChatSplit();
     this.closeStream();
     this._cancelChatIntro();
     if (this.filesMounted) {
@@ -1196,13 +1203,10 @@ export class ChatView {
     });
   }
 
-  // Auto-scroll state machine: pinned to bottom by default; user scrolling
-  // up disables it; scrolling back within AUTO_SCROLL_THRESHOLD re-enables.
-  _splitInit() {
-    // Build the resizable handle + collapse toggle for the right-hand
-    // tools column. State (width, collapsed) is persisted in localStorage
-    // so it survives reloads and applies across the whole app.
-    this.splitHandleEl = el('div', { class: 'chat-split__handle', title: 'drag to resize tools' });
+  // Build the static header (title + collapse toggle) for the tools column.
+  // The actual Split.js instance is created in _initChatSplit() from mount(),
+  // after the elements are in the DOM.
+  _buildToolsColHeader() {
     const toggle = el('button', {
       type: 'button',
       class: 'chat-tools-col__toggle',
@@ -1215,55 +1219,107 @@ export class ChatView {
     );
     this._splitToggleBtn = toggle;
     this.toolsColEl.replaceChildren(header, this.toolsStreamEl);
+  }
 
-    // Restore persisted state. Use a CSS custom property (not an inline
-    // flex-basis) so the .chat-tools-col--collapsed class rule can override
-    // the flex shorthand without fighting an inline style.
+  // Persisted state keys for the inner chat split.
+  static get CHAT_SPLIT_SIZES_KEY()     { return 'grok-remote.split.chat'; }
+  static get CHAT_SPLIT_COLLAPSED_KEY() { return 'grok-remote.split.chat.collapsed'; }
+  static get CHAT_SPLIT_DEFAULT_SIZES() { return [70, 30]; }
+  static get CHAT_SPLIT_MOBILE_MAX()    { return 720; }
+
+  _readChatSplitSizes() {
     try {
-      const w = parseInt(localStorage.getItem('grok-remote.toolsCol.width') || '', 10);
-      if (Number.isFinite(w) && w >= 220 && w <= 900) {
-        this.toolsColEl.style.setProperty('--tools-col-width', `${w}px`);
-      }
-      if (localStorage.getItem('grok-remote.toolsCol.collapsed') === '1') {
-        this.toolsColEl.classList.add('chat-tools-col--collapsed');
-        toggle.textContent = '⟨';
-        toggle.title = 'expand tools panel';
+      const raw = localStorage.getItem(ChatView.CHAT_SPLIT_SIZES_KEY);
+      if (!raw) return ChatView.CHAT_SPLIT_DEFAULT_SIZES.slice();
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length === 2 &&
+          parsed.every((n) => typeof n === 'number' && isFinite(n) && n >= 0 && n <= 100)) {
+        return parsed;
       }
     } catch { /* ignore */ }
+    return ChatView.CHAT_SPLIT_DEFAULT_SIZES.slice();
+  }
 
-    // Drag-to-resize.
-    const startDrag = (ev) => {
-      ev.preventDefault();
-      if (this.toolsColEl.classList.contains('chat-tools-col--collapsed')) return;
-      const startX = ev.clientX;
-      const startW = this.toolsColEl.getBoundingClientRect().width;
-      const onMove = (e) => {
-        const dx = startX - e.clientX;
-        const maxW = Math.max(280, Math.min(900, window.innerWidth * 0.6));
-        const w = Math.max(220, Math.min(maxW, startW + dx));
-        this.toolsColEl.style.setProperty('--tools-col-width', `${w}px`);
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        const w = this.toolsColEl.getBoundingClientRect().width;
-        try { localStorage.setItem('grok-remote.toolsCol.width', String(Math.round(w))); } catch {}
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+  _isChatMobile() {
+    return window.innerWidth <= ChatView.CHAT_SPLIT_MOBILE_MAX;
+  }
+
+  _initChatSplit() {
+    if (this._chatSplit) return;
+    // Mobile: don't init Split.js. CSS stacks the tools column below the
+    // chat stream (see .chat-split @media block). Hide the in-header toggle
+    // since it has no meaning when the layout is stacked.
+    if (this._isChatMobile()) {
+      if (this._splitToggleBtn) this._splitToggleBtn.hidden = true;
+      return;
+    }
+    if (this._splitToggleBtn) this._splitToggleBtn.hidden = false;
+
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY) === '1'; } catch { /* ignore */ }
+    this._chatSplitLastSizes = this._readChatSplitSizes();
+
+    const persistSizes = (sizes) => {
+      try { localStorage.setItem(ChatView.CHAT_SPLIT_SIZES_KEY, JSON.stringify(sizes)); } catch { /* ignore */ }
     };
-    this.splitHandleEl.addEventListener('mousedown', startDrag);
+    const buildSplit = (sizes) => {
+      this._chatSplit = Split([this.streamEl, this.toolsColEl], {
+        sizes,
+        minSize: [400, 240],
+        gutterSize: 6,
+        snapOffset: 0,
+        expandToMin: true,
+        direction: 'horizontal',
+        elementStyle: (dim, size, gutterSize) => ({
+          'flex-basis': `calc(${size}% - ${gutterSize}px)`,
+        }),
+        gutterStyle: (dim, gutterSize) => ({ 'flex-basis': `${gutterSize}px` }),
+        onDragEnd: (next) => {
+          this._chatSplitLastSizes = next;
+          persistSizes(next);
+        },
+      });
+    };
+
+    this._chatSplitCollapsed = collapsed;
+    this._applyChatSplitCollapsedClass();
+    this._updateToolsToggleLabel();
+    if (!collapsed) buildSplit(this._chatSplitLastSizes);
+    this._chatSplitBuild = buildSplit;
+  }
+
+  _destroyChatSplit() {
+    if (this._chatSplit) {
+      try { this._chatSplit.destroy(true, true); } catch { /* ignore */ }
+      this._chatSplit = null;
+    }
+  }
+
+  _applyChatSplitCollapsedClass() {
+    if (!this.chatSplitEl) return;
+    this.chatSplitEl.classList.toggle('chat-split--tools-collapsed', !!this._chatSplitCollapsed);
+  }
+
+  _updateToolsToggleLabel() {
+    if (!this._splitToggleBtn) return;
+    const c = !!this._chatSplitCollapsed;
+    this._splitToggleBtn.textContent = c ? '⟨' : '⟩';
+    this._splitToggleBtn.title = c ? 'expand tools panel' : 'collapse tools panel';
   }
 
   _toggleToolsCol() {
-    const wasCollapsed = this.toolsColEl.classList.contains('chat-tools-col--collapsed');
-    this.toolsColEl.classList.toggle('chat-tools-col--collapsed');
-    const collapsed = !wasCollapsed;
-    if (this._splitToggleBtn) {
-      this._splitToggleBtn.textContent = collapsed ? '⟨' : '⟩';
-      this._splitToggleBtn.title = collapsed ? 'expand tools panel' : 'collapse tools panel';
+    // Mobile: stacked layout, no Split.js, no-op.
+    if (this._isChatMobile()) return;
+    const next = !this._chatSplitCollapsed;
+    this._chatSplitCollapsed = next;
+    try { localStorage.setItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    if (next) {
+      this._destroyChatSplit();
+    } else if (this._chatSplitBuild) {
+      this._chatSplitBuild(this._chatSplitLastSizes);
     }
-    try { localStorage.setItem('grok-remote.toolsCol.collapsed', collapsed ? '1' : '0'); } catch {}
+    this._applyChatSplitCollapsedClass();
+    this._updateToolsToggleLabel();
   }
 
   _ensureToolsGroup(turn) {

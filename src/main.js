@@ -8,6 +8,7 @@
 // the chat view and plays inside the chat-stream when a fresh conversation
 // is opened (turns.length === 0). The topbar keeps a static GR mark.
 
+import Split from 'split.js';
 import { api } from './lib/api.js';
 import { AgentsSidebar } from './views/agents.js';
 import { ChatView } from './views/chat.js';
@@ -186,9 +187,21 @@ function mountDashboard() {
   const shell = el('div', { class: 'dashboard dashboard--with-rail' });
   host.appendChild(shell);
   shell.appendChild(railHost);
-  sidebar.mount(shell);          // appends sidebar.root + starts polling
-  shell.appendChild(mainHost);
-  installSidebarResize(shell, sidebar);
+
+  // Split host: holds the two Split.js panes (sidebar + main). The rail
+  // sits OUTSIDE this container so Split.js never sees it. On mobile,
+  // .sidebar-pane is collapsed to display: contents and the sidebar
+  // becomes an off-canvas drawer (see CSS).
+  const splitHost   = el('div', { class: 'split-host' });
+  const sidebarPane = el('div', { class: 'sidebar-pane' });
+  const mainPane    = el('div', { class: 'main-pane-wrap' });
+  sidebar.mount(sidebarPane);
+  mainPane.appendChild(mainHost);
+  splitHost.appendChild(sidebarPane);
+  splitHost.appendChild(mainPane);
+  shell.appendChild(splitHost);
+
+  installOuterSplit(splitHost, sidebarPane, mainPane);
 
   // hook up settings button in topbar
   const settingsBtn = document.getElementById('open-settings');
@@ -365,150 +378,151 @@ document.addEventListener('DOMContentLoaded', async () => {
   registerPwa();
 });
 
-// ── Resizable + collapsible sidebar ──────────────────────────────────────
+// ── Outer split (sidebar vs main) via Split.js ───────────────────────────
 //
-// The skeleton is split into four small helpers so each concern stays
-// readable:
+// Two persistent bits of state:
+//   grok-remote.split.sidebar           [number, number] sizes in %
+//   grok-remote.split.sidebar.collapsed '1' | '0' (or missing)
 //
-//   restoreSidebarState  - read localStorage, apply --sidebar-width and
-//                          the collapsed class before the first paint.
-//   attachResizeDrag     - wire the vertical drag handle that lives on the
-//                          sidebar/main seam.
-//   attachToggle         - wire the collapse toggle event + reopen tab.
-//   relayoutOverlays     - reposition the (viewport-fixed) drag handle and
-//                          reopen tab whenever the layout changes.
-//
-// The drag handle and the reopen tab are appended to document.body with
-// position: fixed so they cannot perturb the dashboard grid (an earlier
-// bug: absolutely-positioned children inside a CSS grid were still
-// participating in grid auto-placement, which pushed the topbar off-screen
-// when the sidebar collapsed).
-const SIDEBAR_W_KEY = 'grok-remote.sidebar.width';
-const SIDEBAR_C_KEY = 'grok-remote.sidebar.collapsed';
-const SIDEBAR_W_MIN = 220;
-const SIDEBAR_W_MAX = 560;
-const RAIL_WIDTH    = 68;
-const MOBILE_MAX    = 720;
+// On mobile (<= MOBILE_MAX) Split.js does NOT initialize at all. The
+// sidebar reverts to its CSS off-canvas drawer behavior (driven by
+// body[data-drawer-open]). A viewport-cross resize triggers location.reload()
+// so we never have to juggle two layout modes at runtime.
+const SIDEBAR_SIZES_KEY = 'grok-remote.split.sidebar';
+const SIDEBAR_COLLAPSED_KEY = 'grok-remote.split.sidebar.collapsed';
+const SIDEBAR_DEFAULT_SIZES = [22, 78];
+const MOBILE_MAX = 720;
 
 function isMobileViewport() {
-  return window.matchMedia(`(max-width: ${MOBILE_MAX}px)`).matches;
+  return window.innerWidth <= MOBILE_MAX;
 }
 
-function restoreSidebarState(shell) {
+function readSidebarSizes() {
   try {
-    const w = parseInt(localStorage.getItem(SIDEBAR_W_KEY) || '', 10);
-    if (Number.isFinite(w) && w >= SIDEBAR_W_MIN && w <= SIDEBAR_W_MAX) {
-      shell.style.setProperty('--sidebar-width', `${w}px`);
-    }
-    if (localStorage.getItem(SIDEBAR_C_KEY) === '1') {
-      shell.classList.add('dashboard--sidebar-collapsed');
+    const raw = localStorage.getItem(SIDEBAR_SIZES_KEY);
+    if (!raw) return SIDEBAR_DEFAULT_SIZES.slice();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length === 2 &&
+        parsed.every((n) => typeof n === 'number' && isFinite(n) && n >= 0 && n <= 100)) {
+      return parsed;
     }
   } catch { /* ignore */ }
+  return SIDEBAR_DEFAULT_SIZES.slice();
 }
 
-function attachResizeDrag(shell, sidebar, handle, relayout) {
-  handle.addEventListener('mousedown', (ev) => {
-    if (shell.classList.contains('dashboard--sidebar-collapsed')) return;
-    if (isMobileViewport()) return;
-    ev.preventDefault();
-    const startX = ev.clientX;
-    const startW = sidebar.root.getBoundingClientRect().width;
-    const onMove = (e) => {
-      const dx = e.clientX - startX;
-      const w = Math.max(SIDEBAR_W_MIN, Math.min(SIDEBAR_W_MAX, startW + dx));
-      shell.style.setProperty('--sidebar-width', `${w}px`);
-      relayout();
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      const w = sidebar.root.getBoundingClientRect().width;
-      try { localStorage.setItem(SIDEBAR_W_KEY, String(Math.round(w))); } catch { /* ignore */ }
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
+function isSidebarCollapsed() {
+  try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { return false; }
 }
 
-function attachToggle(shell, sidebar, handle, reopenBtn, relayout) {
-  function updateCollapseBtnLabel(collapsed) {
-    const btn = sidebar.sidebarCollapseBtn;
-    if (!btn) return;
-    btn.textContent = collapsed ? '⟩' : '⟨';
-    btn.title = collapsed ? 'expand sidebar' : 'collapse sidebar';
-  }
+function installOuterSplit(splitHost, sidebarPane, mainPane) {
+  const topbarBtn = document.getElementById('topbar-sidebar-toggle');
 
-  function toggleCollapse(forceState) {
-    const next = (typeof forceState === 'boolean')
-      ? forceState
-      : !shell.classList.contains('dashboard--sidebar-collapsed');
-    shell.classList.toggle('dashboard--sidebar-collapsed', next);
-    updateCollapseBtnLabel(next);
-    relayout();
-    try { localStorage.setItem(SIDEBAR_C_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-  }
-
-  // Initial sync of the in-sidebar collapse button label.
-  updateCollapseBtnLabel(shell.classList.contains('dashboard--sidebar-collapsed'));
-
-  reopenBtn.addEventListener('click', () => toggleCollapse(false));
-  document.addEventListener('grok-remote:sidebar-toggle', () => toggleCollapse());
-}
-
-function relayoutOverlays(shell, sidebar, handle, reopenBtn) {
-  // On mobile the sidebar is an off-canvas drawer; the seam/handle and the
-  // edge-reopen tab have no meaning. Force them hidden so the desktop
-  // collapsed class can't leak into the mobile layout.
+  // Mobile: skip Split.js entirely. The sidebar drawer is driven by CSS +
+  // body[data-drawer-open]. Reload on threshold cross to re-init cleanly.
   if (isMobileViewport()) {
-    handle.style.display = 'none';
-    reopenBtn.style.display = 'none';
+    if (topbarBtn) topbarBtn.hidden = true;
+    let wasMobile = true;
+    window.addEventListener('resize', () => {
+      const nowMobile = isMobileViewport();
+      if (wasMobile !== nowMobile) {
+        wasMobile = nowMobile;
+        location.reload();
+      }
+    });
     return;
   }
 
-  const collapsed = shell.classList.contains('dashboard--sidebar-collapsed');
+  if (topbarBtn) topbarBtn.hidden = false;
 
-  if (collapsed) {
-    handle.style.display = 'none';
-    reopenBtn.style.display = '';
-    reopenBtn.style.left = `${RAIL_WIDTH}px`;
-  } else {
-    reopenBtn.style.display = 'none';
-    const rect = sidebar.root.getBoundingClientRect();
-    handle.style.display = '';
-    handle.style.left = `${rect.right - 2}px`;
+  let collapsed = isSidebarCollapsed();
+  let lastExpandedSizes = readSidebarSizes();
+  let split = null;
+
+  function persistSizes(sizes) {
+    try { localStorage.setItem(SIDEBAR_SIZES_KEY, JSON.stringify(sizes)); } catch { /* ignore */ }
   }
-}
+  function persistCollapsed(v) {
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, v ? '1' : '0'); } catch { /* ignore */ }
+  }
 
-function installSidebarResize(shell, sidebar) {
-  restoreSidebarState(shell);
+  function updateTopbarBtn() {
+    if (!topbarBtn) return;
+    topbarBtn.textContent = collapsed ? '⟩' : '⟨';
+    topbarBtn.title = collapsed ? 'expand sidebar' : 'collapse sidebar';
+    topbarBtn.setAttribute('aria-label', collapsed ? 'expand sidebar' : 'collapse sidebar');
+  }
 
-  // Both overlays live on <body> with position: fixed (see style.css).
-  // That keeps them OUT of the dashboard grid entirely, so collapse cannot
-  // create implicit grid rows or perturb the topbar.
-  const handle = el('div', {
-    class: 'sidebar-resize-handle',
-    title: 'drag to resize',
-    'aria-hidden': 'true',
+  function buildSplit(initialSizes) {
+    split = Split([sidebarPane, mainPane], {
+      sizes: initialSizes,
+      minSize: [220, 480],
+      maxSize: [560, Infinity],
+      gutterSize: 6,
+      snapOffset: 0,
+      expandToMin: true,
+      direction: 'horizontal',
+      elementStyle: (dim, size, gutterSize) => ({
+        'flex-basis': `calc(${size}% - ${gutterSize}px)`,
+      }),
+      gutterStyle: (dim, gutterSize) => ({ 'flex-basis': `${gutterSize}px` }),
+      onDragEnd: (sizes) => {
+        lastExpandedSizes = sizes;
+        persistSizes(sizes);
+      },
+    });
+  }
+
+  function destroySplit() {
+    if (split) {
+      try { split.destroy(true, true); } catch { /* ignore */ }
+      split = null;
+    }
+  }
+
+  function applyCollapsedState() {
+    splitHost.classList.toggle('sidebar-collapsed', collapsed);
+    if (collapsed) {
+      destroySplit();
+    } else if (!split) {
+      buildSplit(lastExpandedSizes);
+    }
+    updateTopbarBtn();
+  }
+
+  function setCollapsed(next) {
+    if (collapsed === next) return;
+    collapsed = next;
+    persistCollapsed(collapsed);
+    applyCollapsedState();
+  }
+
+  // Initial mount.
+  if (collapsed) {
+    splitHost.classList.add('sidebar-collapsed');
+  } else {
+    buildSplit(lastExpandedSizes);
+  }
+  updateTopbarBtn();
+
+  // Topbar button + same legacy event listener for any other dispatchers.
+  if (topbarBtn) {
+    topbarBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      setCollapsed(!collapsed);
+    });
+  }
+  document.addEventListener('grok-remote:sidebar-toggle', () => setCollapsed(!collapsed));
+
+  // Reload when crossing the mobile threshold so we don't have to juggle
+  // both layouts at runtime.
+  let wasMobile = false;
+  window.addEventListener('resize', () => {
+    const nowMobile = isMobileViewport();
+    if (wasMobile !== nowMobile) {
+      wasMobile = nowMobile;
+      location.reload();
+    }
   });
-  const reopenBtn = el('button', {
-    type: 'button',
-    class: 'sidebar-reopen-tab',
-    title: 'expand sidebar',
-    'aria-label': 'expand sidebar',
-  }, '⟩');
-  document.body.appendChild(handle);
-  document.body.appendChild(reopenBtn);
-
-  const relayout = () => relayoutOverlays(shell, sidebar, handle, reopenBtn);
-
-  attachResizeDrag(shell, sidebar, handle, relayout);
-  attachToggle(shell, sidebar, handle, reopenBtn, relayout);
-
-  window.addEventListener('resize', relayout);
-  // Run once after mount so the initial position is correct (the sidebar
-  // root must already be in the DOM and laid out for getBoundingClientRect
-  // to return meaningful coords).
-  requestAnimationFrame(relayout);
 }
 
 // ── Background-process tracker (persistent across pages + reloads) ──────
