@@ -1135,10 +1135,14 @@ export class ChatView {
     this._splitToggleBtn = toggle;
     this.toolsColEl.replaceChildren(header, this.toolsStreamEl);
 
-    // Restore persisted state.
+    // Restore persisted state. Use a CSS custom property (not an inline
+    // flex-basis) so the .chat-tools-col--collapsed class rule can override
+    // the flex shorthand without fighting an inline style.
     try {
-      const w = localStorage.getItem('grok-remote.toolsCol.width');
-      if (w) this.toolsColEl.style.flexBasis = w;
+      const w = parseInt(localStorage.getItem('grok-remote.toolsCol.width') || '', 10);
+      if (Number.isFinite(w) && w >= 220 && w <= 900) {
+        this.toolsColEl.style.setProperty('--tools-col-width', `${w}px`);
+      }
       if (localStorage.getItem('grok-remote.toolsCol.collapsed') === '1') {
         this.toolsColEl.classList.add('chat-tools-col--collapsed');
         toggle.textContent = '⟨';
@@ -1156,12 +1160,13 @@ export class ChatView {
         const dx = startX - e.clientX;
         const maxW = Math.max(280, Math.min(900, window.innerWidth * 0.6));
         const w = Math.max(220, Math.min(maxW, startW + dx));
-        this.toolsColEl.style.flexBasis = `${w}px`;
+        this.toolsColEl.style.setProperty('--tools-col-width', `${w}px`);
       };
       const onUp = () => {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
-        try { localStorage.setItem('grok-remote.toolsCol.width', this.toolsColEl.style.flexBasis || ''); } catch {}
+        const w = this.toolsColEl.getBoundingClientRect().width;
+        try { localStorage.setItem('grok-remote.toolsCol.width', String(Math.round(w))); } catch {}
       };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
