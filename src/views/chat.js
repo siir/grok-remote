@@ -50,6 +50,9 @@ export class ChatView {
     this._skillsPromise = null;
 
     this.streamEl  = el('div', { class: 'chat-stream' });
+    this.toolsColEl = el('div', { class: 'chat-tools-col' });
+    this.toolsStreamEl = el('div', { class: 'chat-tools-stream' });
+    this._splitInit();
     this.composerEl = this.buildComposer();
     this.tabsEl    = this.buildTabs();
     this.statusEl  = el('div', { class: 'chat-status' });
@@ -103,7 +106,11 @@ export class ChatView {
           this.bgTermsStripEl,
           this.convoSkillsStripEl,
           this.inFlightStripEl,
-          this.streamEl,
+          el('div', { class: 'chat-split' },
+            this.streamEl,
+            this.splitHandleEl,
+            this.toolsColEl,
+          ),
           this.composerEl,
         ),
         this.filesPane,
@@ -700,6 +707,7 @@ export class ChatView {
     // agent: { id, ... } or null
     this.closeStream();
     this.streamEl.replaceChildren();
+    if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
     this.turns = [];
     this.activeTurn = null;
     // Fire-and-forget skill cache warmup so the banner can paint as soon
@@ -955,6 +963,7 @@ export class ChatView {
       const hist = await api.history(this.agentId, { turns, all });
       const events = (hist && Array.isArray(hist.events)) ? hist.events : [];
       this.streamEl.replaceChildren();
+      if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
       this.turns = [];
       this.activeTurn = null;
       // If there are older turns we didn't load, show a banner at the top.
@@ -1084,6 +1093,81 @@ export class ChatView {
 
   // Auto-scroll state machine: pinned to bottom by default; user scrolling
   // up disables it; scrolling back within AUTO_SCROLL_THRESHOLD re-enables.
+  _splitInit() {
+    // Build the resizable handle + collapse toggle for the right-hand
+    // tools column. State (width, collapsed) is persisted in localStorage
+    // so it survives reloads and applies across the whole app.
+    this.splitHandleEl = el('div', { class: 'chat-split__handle', title: 'drag to resize tools' });
+    const toggle = el('button', {
+      type: 'button',
+      class: 'chat-tools-col__toggle',
+      title: 'collapse tools panel',
+      onclick: () => this._toggleToolsCol(),
+    }, '⟩');
+    const header = el('div', { class: 'chat-tools-col__head' },
+      el('span', { class: 'chat-tools-col__title' }, 'tool calls'),
+      toggle,
+    );
+    this._splitToggleBtn = toggle;
+    this.toolsColEl.replaceChildren(header, this.toolsStreamEl);
+
+    // Restore persisted state.
+    try {
+      const w = localStorage.getItem('grok-remote.toolsCol.width');
+      if (w) this.toolsColEl.style.flexBasis = w;
+      if (localStorage.getItem('grok-remote.toolsCol.collapsed') === '1') {
+        this.toolsColEl.classList.add('chat-tools-col--collapsed');
+        toggle.textContent = '⟨';
+        toggle.title = 'expand tools panel';
+      }
+    } catch { /* ignore */ }
+
+    // Drag-to-resize.
+    const startDrag = (ev) => {
+      ev.preventDefault();
+      if (this.toolsColEl.classList.contains('chat-tools-col--collapsed')) return;
+      const startX = ev.clientX;
+      const startW = this.toolsColEl.getBoundingClientRect().width;
+      const onMove = (e) => {
+        const dx = startX - e.clientX;
+        const maxW = Math.max(280, Math.min(900, window.innerWidth * 0.6));
+        const w = Math.max(220, Math.min(maxW, startW + dx));
+        this.toolsColEl.style.flexBasis = `${w}px`;
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        try { localStorage.setItem('grok-remote.toolsCol.width', this.toolsColEl.style.flexBasis || ''); } catch {}
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+    this.splitHandleEl.addEventListener('mousedown', startDrag);
+  }
+
+  _toggleToolsCol() {
+    const wasCollapsed = this.toolsColEl.classList.contains('chat-tools-col--collapsed');
+    this.toolsColEl.classList.toggle('chat-tools-col--collapsed');
+    const collapsed = !wasCollapsed;
+    if (this._splitToggleBtn) {
+      this._splitToggleBtn.textContent = collapsed ? '⟨' : '⟩';
+      this._splitToggleBtn.title = collapsed ? 'expand tools panel' : 'collapse tools panel';
+    }
+    try { localStorage.setItem('grok-remote.toolsCol.collapsed', collapsed ? '1' : '0'); } catch {}
+  }
+
+  _ensureToolsGroup(turn) {
+    if (turn._toolsGroup) return turn._toolsGroup;
+    const snippet = (turn.userText || '').trim();
+    const short = snippet.length > 80 ? snippet.slice(0, 78) + '...' : snippet;
+    const group = el('div', { class: 'tools-group' },
+      short ? el('div', { class: 'tools-group__head', title: snippet }, short) : null,
+    );
+    turn._toolsGroup = group;
+    this.toolsStreamEl.appendChild(group);
+    return group;
+  }
+
   _initAutoScroll() {
     this._autoScroll = true;
     const THRESHOLD = 60; // px from bottom counts as "at bottom"
@@ -1481,7 +1565,7 @@ export class ChatView {
     const turn = this.ensureTurn();
     const card = renderToolCard(data);
     turn.tools.push({ id: data.toolCallId, card });
-    turn.root.appendChild(card.node);
+    this._ensureToolsGroup(turn).appendChild(card.node);
     // Add to the in-flight strip unless this came from history replay
     // (those calls are already terminal and would just flash).
     if (!(opts && opts.fromHistory)) {
@@ -1500,7 +1584,7 @@ export class ChatView {
       // server might emit an update before we ever saw a tool_call. create one.
       const card = renderToolCard(data);
       turn.tools.push({ id: data.toolCallId, card });
-      turn.root.appendChild(card.node);
+      this._ensureToolsGroup(turn).appendChild(card.node);
       if (!(opts && opts.fromHistory)) this._addInFlight(data, card.node);
       entry = turn.tools[turn.tools.length - 1];
     }
