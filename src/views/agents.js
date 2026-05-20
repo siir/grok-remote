@@ -220,6 +220,7 @@ export class AgentsSidebar {
       es.addEventListener('agent_added',   onMutation);
       es.addEventListener('agent_removed', onMutation);
       es.addEventListener('agent_updated', onMutation);
+      es.addEventListener('agent_status',  onMutation);
       es.addEventListener('error', () => { this._sseAlive = false; });
       apply();
     } catch {

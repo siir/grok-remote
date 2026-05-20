@@ -290,6 +290,7 @@ function FlowInner({ filterIds = null }) {
       es.addEventListener('agent_added',   () => { refresh(); });
       es.addEventListener('agent_removed', () => { refresh(); });
       es.addEventListener('agent_updated', () => { refresh(); });
+      es.addEventListener('agent_status',  () => { refresh(); });
       es.addEventListener('error', () => { sseAlive = false; });
     } catch { /* fall through to polling */ }
     pollTimerRef.current = setInterval(() => {
