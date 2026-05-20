@@ -727,7 +727,8 @@ function openBgViewer(getSnapshot) {
               target: '_blank',
               rel: 'noopener',
               title: `open ${t.url}`,
-            }, `open ↗`),
+              html: `<span class="bgglobal-viewer__open-url-ico">${iconHtml('globe')}</span><span class="bgglobal-viewer__open-url-label">Open App</span>`,
+            }),
             el('button', {
               type: 'button', class: 'bgglobal-viewer__open-output',
               onclick: () => {

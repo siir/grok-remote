@@ -106,9 +106,17 @@ export const ICONS = {
     <circle cx="14" cy="15" r="1.4"/>
   `),
 
-  // star — outlined polygon, filled via CSS when active
+  // star, outlined polygon; filled via CSS when active
   star: wrap(`
     <path d="M10 2.5 12.4 7.4 17.8 8.2 13.9 12 14.8 17.3 10 14.9 5.2 17.3 6.1 12 2.2 8.2 7.6 7.4z"/>
+  `),
+
+  // globe (worldwide web) for "Open App" affordance on bg dev-server chips
+  globe: wrap(`
+    <circle cx="10" cy="10" r="7"/>
+    <path d="M3 10h14"/>
+    <path d="M10 3a10 10 0 0 1 0 14"/>
+    <path d="M10 3a10 10 0 0 0 0 14"/>
   `),
 };
 

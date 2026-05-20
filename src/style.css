@@ -837,50 +837,80 @@ body::before {
 }
 .bgterms-more:hover { color: var(--text); border-color: var(--border-2); }
 
-/* Detected dev-server URL: tiny open-in-new-tab link next to a chip. */
+/* Detected dev-server URL: "Open App" link next to a chip. Globe icon
+   + label so the affordance reads as "this opens a webpage" instead of
+   a cryptic port number. */
 .bgterms-open {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
+  gap: 6px;
+  padding: 4px 12px;
   background: rgba(94, 234, 212, 0.08);
   border: 1px solid rgba(94, 234, 212, 0.45);
   border-radius: 999px;
   color: var(--teal);
   font-family: var(--mono);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   text-decoration: none;
 }
 .bgterms-open:hover { background: rgba(94, 234, 212, 0.16); }
+.bgterms-open__ico {
+  display: inline-flex;
+  align-items: center;
+  width: 14px;
+  height: 14px;
+}
+.bgterms-open__ico svg { width: 14px; height: 14px; }
 
 /* In the per-conversation single-terminal viewer */
 .bgterm-viewer__open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: rgba(94, 234, 212, 0.08);
   border: 1px solid var(--teal);
   color: var(--teal);
-  padding: 3px 12px;
+  padding: 4px 12px;
   border-radius: 999px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
   text-decoration: none;
 }
 .bgterm-viewer__open:hover { background: rgba(94, 234, 212, 0.16); }
+.bgterm-viewer__open-ico {
+  display: inline-flex;
+  align-items: center;
+  width: 14px;
+  height: 14px;
+}
+.bgterm-viewer__open-ico svg { width: 14px; height: 14px; }
 
 /* In the global viewer rows */
 .bgglobal-viewer__open-url {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   background: rgba(94, 234, 212, 0.08);
   border: 1px solid var(--teal);
   color: var(--teal);
-  padding: 3px 10px;
-  border-radius: 4px;
+  padding: 4px 12px;
+  border-radius: 999px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: 600;
   text-decoration: none;
 }
 .bgglobal-viewer__open-url:hover { background: rgba(94, 234, 212, 0.16); }
+.bgglobal-viewer__open-url-ico {
+  display: inline-flex;
+  align-items: center;
+  width: 14px;
+  height: 14px;
+}
+.bgglobal-viewer__open-url-ico svg { width: 14px; height: 14px; }
 .bgterms-chip__dot {
   width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
   background: var(--teal);

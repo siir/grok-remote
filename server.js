@@ -758,6 +758,14 @@ function mergeBgSources(a) {
           if (buf) output = buf.toString('utf8');
         } catch { /* ignore */ }
       }
+      // Grok occasionally cleans up the on-disk log between turns; fall back
+      // to the cached TaskOutput snapshot the manager grabbed off the stream.
+      if (!output && (t.source === 'grok' || t.source === 'merged')) {
+        const bg = a && a.bgTasks && a.bgTasks.get(t.id);
+        if (bg && typeof bg.cached_output === 'string' && bg.cached_output.length) {
+          output = bg.cached_output;
+        }
+      }
       const url = inferDevServerUrl(t.command, output);
       if (url) t.url = url;
     }
@@ -831,8 +839,16 @@ function handleBgTaskRead(req, res, rec, tid) {
         output = fs.readFileSync(t.output_file, 'utf8');
       }
     } catch (err) {
-      output = `[grok-remote] failed to read log: ${err.message}`;
+      // Grok may have rotated or deleted the log; fall back to the snapshot
+      // the manager cached off the in-stream TaskOutput notifications.
+      if (typeof t.cached_output === 'string' && t.cached_output.length) {
+        output = t.cached_output;
+      } else {
+        output = `[grok-remote] failed to read log: ${err.message}`;
+      }
     }
+  } else if (typeof t.cached_output === 'string' && t.cached_output.length) {
+    output = t.cached_output;
   }
   return sendJson(res, 200, {
     ok: true,

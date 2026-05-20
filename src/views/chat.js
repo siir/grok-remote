@@ -1367,17 +1367,16 @@ export class ChatView {
       );
       this.bgTermsStripEl.appendChild(chip);
       // If a local URL was detected for this dev server, render an
-      // adjacent open link so the user can pop straight to it.
+      // adjacent "Open App" link so the user can pop straight to it.
       if (t.url) {
-        const portMatch = t.url.match(/:(\d{2,5})\b/);
-        const portLabel = portMatch ? `:${portMatch[1]}` : 'open';
         const link = el('a', {
           class: 'bgterms-open',
           href: t.url,
           target: '_blank',
           rel: 'noopener',
           title: `open ${t.url}`,
-        }, `↗ ${portLabel}`);
+        });
+        link.innerHTML = `<span class="bgterms-open__ico">${iconHtml('globe')}</span><span class="bgterms-open__label">Open App</span>`;
         this.bgTermsStripEl.appendChild(link);
       }
     }
@@ -1514,7 +1513,8 @@ export class ChatView {
               target: '_blank',
               rel: 'noopener',
               title: `open ${r.url}`,
-            }, `open ↗`);
+            });
+            openLink.innerHTML = `<span class="bgterm-viewer__open-ico">${iconHtml('globe')}</span><span class="bgterm-viewer__open-label">Open App</span>`;
             status.parentNode.insertBefore(openLink, killBtn);
           }
           openLink.href = r.url;
