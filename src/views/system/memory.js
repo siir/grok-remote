@@ -1,93 +1,487 @@
-// Memory page. Two cards (workspace + global) and a "clear all" footer.
-// All actions hit /api/system/memory{,/clear}; there is no live SSE here.
+// Memory page.
+//
+// Lists grok memory files grouped by scope (workspace, global). Each file
+// can be viewed, edited inline, renamed-via-recreate is not supported, and
+// deleted. The page also keeps the legacy "clear" buttons that route through
+// the grok CLI (`grok memory clear --scope`).
+//
+// Endpoints used live in lib/routes/system/memory.js.
 
 import { api } from '../../lib/api.js';
 
-let activeContainer = null;
-let abortToken      = 0;
+const SCOPE_LABEL = {
+  workspace: 'workspace',
+  global:    'global',
+};
+const SCOPE_ORDER = ['workspace', 'global'];
 
-export function mount(container) {
+let activeContainer = null;
+let aborted = false;
+let cachedData = null;
+let selectedPath = null;
+let editing = false;
+let filterText = '';
+
+export async function mount(container) {
   activeContainer = container;
-  abortToken += 1;
-  const myToken = abortToken;
+  aborted = false;
+  selectedPath = null;
+  editing = false;
+  filterText = '';
 
   container.replaceChildren();
   container.innerHTML = `
-    <section class="system-page memory-page">
+    <section class="system-page memory-page memory-page--v2">
       <header class="system-page-header">
         <h2 class="system-page-title">Memory</h2>
         <p class="system-page-sub">
-          The MEMORY.md files grok keeps for this workspace and your home
-          directory. Clearing wipes the file plus the matching session
-          index. There is no undo.
+          The MEMORY.md plus any sibling notes grok keeps under
+          <code>.grok/memory</code> for this workspace and your home.
+          Edits write atomically. Clearing a scope wipes the file plus the
+          matching session index; there is no undo.
         </p>
       </header>
 
-      <div class="memory-grid">
-        <article class="memory-card" data-scope="workspace">
-          <header class="memory-card-head">
-            <span class="memory-card-label">workspace memory</span>
-            <button type="button" class="memory-clear-btn" data-scope="workspace">clear</button>
-          </header>
-          <div class="memory-card-body" data-role="body">
-            <p class="memory-status">loading...</p>
-          </div>
-        </article>
+      <div class="memory-toolbar">
+        <input type="text" class="memory-search" placeholder="filter by name or content..." />
+        <button type="button" class="memory-refresh-btn">refresh</button>
+      </div>
 
-        <article class="memory-card" data-scope="global">
-          <header class="memory-card-head">
-            <span class="memory-card-label">global memory</span>
-            <button type="button" class="memory-clear-btn" data-scope="global">clear</button>
-          </header>
-          <div class="memory-card-body" data-role="body">
-            <p class="memory-status">loading...</p>
+      <div class="memory-layout">
+        <aside class="memory-sidebar" data-role="sidebar">
+          <div class="memory-sidebar-loading">loading...</div>
+        </aside>
+        <div class="memory-viewer" data-role="viewer">
+          <div class="memory-viewer-empty">
+            pick a memory file from the sidebar to view its content.
           </div>
-        </article>
+        </div>
       </div>
 
       <footer class="memory-footer">
         <button type="button" class="memory-clear-all-btn" data-stage="idle">
           clear all memory
         </button>
-        <span class="memory-footer-note">click twice to confirm. removes both workspace and global memory.</span>
+        <span class="memory-footer-note">
+          click twice to confirm. invokes <code>grok memory clear --all</code>.
+        </span>
       </footer>
 
       <p class="memory-error" data-role="error" hidden></p>
     </section>
   `;
 
-  wireEvents(container, () => myToken === abortToken);
-  refresh(container, () => myToken === abortToken).catch(() => {});
+  wireToolbar(container);
+  await reload(container);
 }
 
 export function unmount() {
-  abortToken += 1;
+  aborted = true;
   if (activeContainer) {
     activeContainer.replaceChildren();
     activeContainer = null;
   }
+  cachedData = null;
+  selectedPath = null;
+  editing = false;
 }
 
-// ----- helpers -----
+// ---------- core ----------
 
-function wireEvents(root, alive) {
-  root.querySelectorAll('.memory-clear-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const scope = btn.dataset.scope;
-      const label = scope === 'workspace' ? 'workspace memory' : 'global memory';
-      if (!window.confirm(`Clear ${label}? This cannot be undone.`)) return;
-      await runClear(root, alive, scope, btn);
+async function reload(container) {
+  const sidebar = container.querySelector('[data-role="sidebar"]');
+  if (sidebar) sidebar.innerHTML = `<div class="memory-sidebar-loading">loading...</div>`;
+  try {
+    const data = await api.memory.get();
+    if (aborted || activeContainer !== container) return;
+    cachedData = data;
+    renderSidebar(container);
+    // Keep selection if the file still exists.
+    if (selectedPath && !findRecord(selectedPath)) {
+      selectedPath = null;
+      editing = false;
+      renderViewer(container);
+    } else if (selectedPath) {
+      // Refresh viewer (size/mtime may have changed).
+      renderViewer(container);
+    } else {
+      renderViewer(container);
+    }
+  } catch (err) {
+    if (aborted || activeContainer !== container) return;
+    showError(container, err.message);
+    if (sidebar) sidebar.innerHTML = '';
+  }
+}
+
+function showError(container, msg) {
+  const errEl = container.querySelector('[data-role="error"]');
+  if (!errEl) return;
+  errEl.hidden = false;
+  errEl.textContent = msg || 'unknown error';
+}
+
+function clearError(container) {
+  const errEl = container.querySelector('[data-role="error"]');
+  if (!errEl) return;
+  errEl.hidden = true;
+  errEl.textContent = '';
+}
+
+// ---------- sidebar (file list) ----------
+
+function renderSidebar(container) {
+  const sidebar = container.querySelector('[data-role="sidebar"]');
+  if (!sidebar) return;
+  sidebar.replaceChildren();
+  const roots = Array.isArray(cachedData && cachedData.roots) ? cachedData.roots : [];
+  if (!roots.length) {
+    const empty = document.createElement('div');
+    empty.className = 'memory-sidebar-loading';
+    empty.textContent = 'no memory roots configured.';
+    sidebar.appendChild(empty);
+    return;
+  }
+  // Order workspace then global.
+  const ordered = SCOPE_ORDER
+    .map(s => roots.find(r => r.scope === s))
+    .filter(Boolean)
+    .concat(roots.filter(r => !SCOPE_ORDER.includes(r.scope)));
+
+  for (const root of ordered) {
+    sidebar.appendChild(renderScopeGroup(container, root));
+  }
+}
+
+function renderScopeGroup(container, root) {
+  const group = document.createElement('section');
+  group.className = 'memory-scope';
+  group.dataset.scope = root.scope;
+
+  const head = document.createElement('header');
+  head.className = 'memory-scope-head';
+  const label = document.createElement('span');
+  label.className = 'memory-scope-label';
+  label.textContent = SCOPE_LABEL[root.scope] || root.scope;
+  head.appendChild(label);
+
+  const actions = document.createElement('div');
+  actions.className = 'memory-scope-actions';
+  const newBtn = document.createElement('button');
+  newBtn.type = 'button';
+  newBtn.className = 'memory-scope-btn';
+  newBtn.textContent = '+ new';
+  newBtn.title = 'create a new memory file in this scope';
+  newBtn.addEventListener('click', () => createFile(container, root.scope));
+  actions.appendChild(newBtn);
+
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'memory-scope-btn memory-scope-btn--warn';
+  clearBtn.textContent = 'clear';
+  clearBtn.title = `grok memory clear --${root.scope}`;
+  clearBtn.addEventListener('click', () => clearScope(container, root.scope, clearBtn));
+  actions.appendChild(clearBtn);
+
+  head.appendChild(actions);
+  group.appendChild(head);
+
+  const dir = document.createElement('div');
+  dir.className = 'memory-scope-dir';
+  dir.textContent = shortenPath(root.dir);
+  dir.title = root.dir;
+  group.appendChild(dir);
+
+  const list = document.createElement('ul');
+  list.className = 'memory-file-list';
+
+  const files = Array.isArray(root.files) ? root.files : [];
+  const filtered = applyFilter(files);
+
+  if (!filtered.length) {
+    const empty = document.createElement('li');
+    empty.className = 'memory-file-empty';
+    if (!root.exists) empty.textContent = '(directory not yet created)';
+    else if (!files.length) empty.textContent = '(no .md files)';
+    else empty.textContent = '(no matches)';
+    list.appendChild(empty);
+  } else {
+    for (const f of filtered) {
+      list.appendChild(renderFileRow(container, f));
+    }
+  }
+
+  group.appendChild(list);
+  return group;
+}
+
+function renderFileRow(container, rec) {
+  const li = document.createElement('li');
+  li.className = 'memory-file';
+  if (selectedPath === rec.path) li.classList.add('memory-file--active');
+  li.dataset.path = rec.path;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'memory-file-pick';
+  btn.title = rec.path;
+
+  const top = document.createElement('div');
+  top.className = 'memory-file-top';
+  const name = document.createElement('span');
+  name.className = 'memory-file-name';
+  name.textContent = rec.name;
+  const meta = document.createElement('span');
+  meta.className = 'memory-file-meta';
+  meta.textContent = fmtBytes(rec.size);
+  top.appendChild(name);
+  top.appendChild(meta);
+
+  const snip = document.createElement('div');
+  snip.className = 'memory-file-snip';
+  snip.textContent = rec.snippet || '(empty)';
+
+  btn.appendChild(top);
+  btn.appendChild(snip);
+  btn.addEventListener('click', () => {
+    selectedPath = rec.path;
+    editing = false;
+    // Refresh selected state cheaply.
+    container.querySelectorAll('.memory-file').forEach(el => {
+      el.classList.toggle('memory-file--active', el.dataset.path === selectedPath);
     });
+    renderViewer(container);
   });
 
-  const allBtn = root.querySelector('.memory-clear-all-btn');
+  li.appendChild(btn);
+  return li;
+}
+
+function applyFilter(files) {
+  if (!filterText.trim()) return files;
+  const q = filterText.trim().toLowerCase();
+  return files.filter(f => {
+    if (f.name && f.name.toLowerCase().includes(q)) return true;
+    if (f.snippet && f.snippet.toLowerCase().includes(q)) return true;
+    return false;
+  });
+}
+
+// ---------- viewer ----------
+
+async function renderViewer(container) {
+  const viewer = container.querySelector('[data-role="viewer"]');
+  if (!viewer) return;
+  viewer.replaceChildren();
+  if (!selectedPath) {
+    const empty = document.createElement('div');
+    empty.className = 'memory-viewer-empty';
+    empty.textContent = 'pick a memory file from the sidebar to view its content.';
+    viewer.appendChild(empty);
+    return;
+  }
+  const rec = findRecord(selectedPath);
+  if (!rec) {
+    const empty = document.createElement('div');
+    empty.className = 'memory-viewer-empty';
+    empty.textContent = 'file not found (it may have been deleted).';
+    viewer.appendChild(empty);
+    return;
+  }
+
+  // Header.
+  const head = document.createElement('header');
+  head.className = 'memory-viewer-head';
+  const title = document.createElement('div');
+  title.className = 'memory-viewer-title';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'memory-viewer-name';
+  nameEl.textContent = rec.name;
+  const pathEl = document.createElement('span');
+  pathEl.className = 'memory-viewer-path';
+  pathEl.textContent = shortenPath(rec.path);
+  pathEl.title = rec.path;
+  title.appendChild(nameEl);
+  title.appendChild(pathEl);
+  head.appendChild(title);
+
+  const meta = document.createElement('dl');
+  meta.className = 'memory-viewer-meta';
+  meta.append(
+    metaRow('size',  fmtBytes(rec.size)),
+    metaRow('mtime', rec.mtime ? fmtTime(rec.mtime) : '-'),
+  );
+  head.appendChild(meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'memory-viewer-actions';
+  if (!editing) {
+    actions.appendChild(mkBtn('edit', '', () => {
+      editing = true;
+      renderViewer(container);
+    }));
+    actions.appendChild(mkBtn('delete', 'memory-card-btn--warn', () => {
+      deleteFile(container, rec);
+    }));
+  }
+  head.appendChild(actions);
+  viewer.appendChild(head);
+
+  // Body: either read-only pre or editable textarea.
+  const body = document.createElement('div');
+  body.className = 'memory-viewer-body';
+  body.textContent = 'loading...';
+  viewer.appendChild(body);
+
+  let content = '';
+  try {
+    const r = await api.memory.read(rec.path);
+    if (aborted || activeContainer !== container) return;
+    if (r && r.ok) content = r.content || '';
+    else throw new Error((r && r.error) || 'read failed');
+  } catch (err) {
+    body.textContent = '';
+    const errEl = document.createElement('div');
+    errEl.className = 'memory-viewer-err';
+    errEl.textContent = 'read failed: ' + err.message;
+    body.appendChild(errEl);
+    return;
+  }
+
+  body.textContent = '';
+  if (!editing) {
+    const pre = document.createElement('pre');
+    pre.className = 'memory-viewer-pre';
+    pre.textContent = content;
+    body.appendChild(pre);
+    return;
+  }
+
+  // Edit mode.
+  const ta = document.createElement('textarea');
+  ta.className = 'memory-viewer-ta';
+  ta.value = content;
+  ta.spellcheck = false;
+  ta.rows = 24;
+  const bar = document.createElement('div');
+  bar.className = 'memory-viewer-editbar';
+  const status = document.createElement('span');
+  status.className = 'memory-viewer-status';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'memory-card-btn memory-card-btn--good';
+  saveBtn.textContent = 'save';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'memory-card-btn';
+  cancelBtn.textContent = 'cancel';
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    cancelBtn.disabled = true;
+    status.textContent = 'saving...';
+    try {
+      await api.memory.saveContent(rec.path, ta.value);
+      status.textContent = 'saved.';
+      editing = false;
+      await reload(container);
+    } catch (err) {
+      status.textContent = 'save failed: ' + err.message;
+      saveBtn.disabled = false;
+      cancelBtn.disabled = false;
+    }
+  });
+  cancelBtn.addEventListener('click', () => {
+    editing = false;
+    renderViewer(container);
+  });
+  bar.appendChild(saveBtn);
+  bar.appendChild(cancelBtn);
+  bar.appendChild(status);
+  body.appendChild(ta);
+  body.appendChild(bar);
+}
+
+// ---------- actions ----------
+
+async function createFile(container, scope) {
+  const raw = window.prompt('new memory file name (kebab-case, .md optional):', '');
+  if (!raw) return;
+  const trimmed = raw.trim();
+  if (!trimmed) return;
+  // Validate locally for nicer error messaging; backend validates again.
+  const cleaned = trimmed.replace(/\s+/g, '-');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*(\.md)?$/.test(cleaned)) {
+    alert('invalid name. Use kebab-case (letters, digits, dot, dash, underscore).');
+    return;
+  }
+  try {
+    const r = await api.memory.createFile(scope, cleaned, '');
+    if (r && r.ok) {
+      selectedPath = r.path;
+      editing = true;
+      await reload(container);
+    } else {
+      alert('create failed: ' + ((r && r.error) || 'unknown'));
+    }
+  } catch (err) {
+    alert('create failed: ' + err.message);
+  }
+}
+
+async function deleteFile(container, rec) {
+  if (!window.confirm(`Delete ${rec.name}? This cannot be undone.`)) return;
+  try {
+    await api.memory.deleteFile(rec.path);
+    if (selectedPath === rec.path) {
+      selectedPath = null;
+      editing = false;
+    }
+    await reload(container);
+  } catch (err) {
+    alert('delete failed: ' + err.message);
+  }
+}
+
+async function clearScope(container, scope, btn) {
+  const label = SCOPE_LABEL[scope] || scope;
+  if (!window.confirm(`Clear ${label} memory? This cannot be undone.`)) return;
+  clearError(container);
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'clearing...';
+  try {
+    await api.memory.clear(scope);
+    await reload(container);
+  } catch (err) {
+    showError(container, err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+
+// ---------- toolbar wiring ----------
+
+function wireToolbar(container) {
+  const search = container.querySelector('.memory-search');
+  if (search) {
+    search.addEventListener('input', () => {
+      filterText = search.value || '';
+      renderSidebar(container);
+    });
+  }
+  const refresh = container.querySelector('.memory-refresh-btn');
+  if (refresh) {
+    refresh.addEventListener('click', () => reload(container));
+  }
+  const allBtn = container.querySelector('.memory-clear-all-btn');
   if (allBtn) {
     allBtn.addEventListener('click', async () => {
       if (allBtn.dataset.stage !== 'armed') {
         allBtn.dataset.stage = 'armed';
         allBtn.textContent = 'click again to confirm';
         setTimeout(() => {
-          if (!alive()) return;
+          if (aborted) return;
           if (allBtn.dataset.stage === 'armed') {
             allBtn.dataset.stage = 'idle';
             allBtn.textContent = 'clear all memory';
@@ -98,75 +492,39 @@ function wireEvents(root, alive) {
       allBtn.dataset.stage = 'idle';
       allBtn.textContent = 'clear all memory';
       if (!window.confirm('Clear ALL memory (workspace + global)? This cannot be undone.')) return;
-      await runClear(root, alive, 'all', allBtn);
+      clearError(container);
+      allBtn.disabled = true;
+      try {
+        await api.memory.clear('all');
+        await reload(container);
+      } catch (err) {
+        showError(container, err.message);
+      } finally {
+        allBtn.disabled = false;
+      }
     });
   }
 }
 
-async function runClear(root, alive, scope, btn) {
-  const errEl = root.querySelector('[data-role="error"]');
-  if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
-  const prev = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'clearing...';
-  try {
-    const data = await api.memory.clear(scope);
-    if (!alive()) return;
-    renderCards(root, data);
-  } catch (err) {
-    if (!alive()) return;
-    if (errEl) { errEl.hidden = false; errEl.textContent = err?.message || String(err); }
-  } finally {
-    if (alive()) {
-      btn.disabled = false;
-      btn.textContent = prev;
+// ---------- helpers ----------
+
+function findRecord(p) {
+  const roots = Array.isArray(cachedData && cachedData.roots) ? cachedData.roots : [];
+  for (const r of roots) {
+    for (const f of (r.files || [])) {
+      if (f.path === p) return f;
     }
   }
+  return null;
 }
 
-async function refresh(root, alive) {
-  const errEl = root.querySelector('[data-role="error"]');
-  if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
-  try {
-    const data = await api.memory.get();
-    if (!alive()) return;
-    renderCards(root, data);
-  } catch (err) {
-    if (!alive()) return;
-    if (errEl) { errEl.hidden = false; errEl.textContent = err?.message || String(err); }
-  }
-}
-
-function renderCards(root, data) {
-  const ws = (data && data.workspace) || { path: '', exists: false, size: 0, mtime: null };
-  const gl = (data && data.global)    || { path: '', exists: false, size: 0, mtime: null };
-  renderCard(root.querySelector('.memory-card[data-scope="workspace"] [data-role="body"]'), ws);
-  renderCard(root.querySelector('.memory-card[data-scope="global"]    [data-role="body"]'), gl);
-}
-
-function renderCard(bodyEl, block) {
-  if (!bodyEl) return;
-  bodyEl.replaceChildren();
-  const pathEl = document.createElement('p');
-  pathEl.className = 'memory-path';
-  pathEl.textContent = block.path || '(unknown path)';
-  bodyEl.appendChild(pathEl);
-
-  const meta = document.createElement('dl');
-  meta.className = 'memory-meta';
-  meta.append(
-    metaRow('status', block.exists ? 'present' : '(empty)'),
-    metaRow('size',   block.exists ? fmtBytes(block.size) : '0 B'),
-    metaRow('mtime',  block.mtime ? fmtTime(block.mtime) : 'never'),
-  );
-  bodyEl.appendChild(meta);
-
-  if (block.error) {
-    const err = document.createElement('p');
-    err.className = 'memory-card-error';
-    err.textContent = block.error;
-    bodyEl.appendChild(err);
-  }
+function mkBtn(label, cls, onclick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `memory-card-btn ${cls || ''}`.trim();
+  b.textContent = label;
+  b.addEventListener('click', onclick);
+  return b;
 }
 
 function metaRow(label, value) {
@@ -194,4 +552,11 @@ function fmtTime(iso) {
   } catch {
     return iso;
   }
+}
+
+function shortenPath(p) {
+  if (!p) return '';
+  const home = '/Users/dan';
+  if (p.startsWith(home)) return '~' + p.slice(home.length);
+  return p;
 }
