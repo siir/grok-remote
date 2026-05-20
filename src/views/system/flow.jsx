@@ -49,8 +49,35 @@ const GROUP_GAP_MS = 3000;
 
 // A tool_call whose kind matches this is treated as a sub-agent invocation
 // rather than a regular tool. Matches "Agent", "Agent(explore)",
-// "agent(planner)", etc.
+// "agent(planner)", etc. Kept for completeness, but the actual grok signal
+// lives in rawInput.variant === "Task" / rawInput.subagent_type, which
+// isSubAgentCall() below picks up.
 const SUB_AGENT_KIND_RE = /^agent(?:\(.*\))?$/i;
+
+// Treat a tool_call as a sub-agent invocation when ANY of these hold:
+//   1. rawInput.variant === "Task"               (grok subagent tool shape)
+//   2. rawInput.subagent_type is a string         (subagent kind, e.g. "general-purpose")
+//   3. update.kind matches the SUB_AGENT_KIND_RE  (legacy / ACP-style)
+// The actual subagent label comes from rawInput.description, then title,
+// then rawInput.prompt, then "sub-agent".
+function isSubAgentCall(u) {
+  if (!u || typeof u !== 'object') return false;
+  if (SUB_AGENT_KIND_RE.test(String(u.kind || ''))) return true;
+  const ri = u.rawInput;
+  if (ri && typeof ri === 'object') {
+    if (ri.variant === 'Task') return true;
+    if (typeof ri.subagent_type === 'string' && ri.subagent_type) return true;
+  }
+  return false;
+}
+
+function pickSubAgentLabel(u) {
+  const ri = (u && u.rawInput) || {};
+  return (typeof ri.description === 'string' && ri.description.trim())
+    || (typeof u.title === 'string' && u.title.trim())
+    || (typeof ri.prompt === 'string' && ri.prompt.trim().split('\n')[0].slice(0, 80))
+    || 'sub-agent';
+}
 
 // Sub-agent layout: cards hang off the LEFT side of the main agent, stacked
 // vertically using the same AGENT_GAP-style cadence so future deep nesting
@@ -573,15 +600,16 @@ function FlowInner({ filterIds = null }) {
       // serve it flat, so accept either.
       const u = (raw.update && typeof raw.update === 'object') ? raw.update : raw;
       const id     = u.toolCallId || u.id || `tc-${Date.now()}-${Math.random()}`;
-      const kind   = u.kind || '';
-      const label  = pickToolLabel(u);
+      const kind   = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.kind)
+                  || u.kind || '';
+      const label  = isSubAgentCall(u) ? pickSubAgentLabel(u) : pickToolLabel(u);
       const status = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.status) || u.status || 'Pending';
       const startedAt = Date.now();
 
       // Sub-agent invocations get peeled off into their own state slot so we
       // can visualize the parent -> child hierarchy. Mirrors the regular
       // tool_call plumbing.
-      if (SUB_AGENT_KIND_RE.test(kind)) {
+      if (isSubAgentCall(u)) {
         const prompt = (u.rawInput && (u.rawInput.prompt || u.rawInput.task || u.rawInput.input)) || null;
         patchAgent(agent.id, (cur) => {
           const prevSubs = Array.isArray(cur.subAgents) ? cur.subAgents : [];
@@ -678,7 +706,7 @@ function FlowInner({ filterIds = null }) {
       patchAgent(agent.id, (cur) => {
         const subs = Array.isArray(cur.subAgents) ? cur.subAgents : [];
         const subIdx = subs.findIndex(s => s.id === id);
-        const isSubKind = SUB_AGENT_KIND_RE.test(u.kind || '');
+        const isSubKind = isSubAgentCall(u);
         if (subIdx >= 0 || isSubKind) {
           if (subIdx < 0) {
             // Update arrived for an Agent-kind id we hadn't seen as a
@@ -687,7 +715,7 @@ function FlowInner({ filterIds = null }) {
             const newSub = {
               id,
               kind: u.kind || '',
-              label: pickToolLabel(u),
+              label: pickSubAgentLabel(u),
               parentToolCallId: id,
               status,
               prompt,
@@ -717,7 +745,7 @@ function FlowInner({ filterIds = null }) {
           const next = {
             ...prev,
             kind: u.kind || prev.kind,
-            label: pickToolLabel(u) || prev.label,
+            label: pickSubAgentLabel(u) || prev.label,
             status,
             rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
             response: newContent,
