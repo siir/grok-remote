@@ -983,6 +983,17 @@ export class ChatView {
         this.handleEvent(name, data, { fromHistory: true });
       }
       this._lastEventTs = null;
+      // History replay may end with an unterminated turn (interrupted session,
+      // or a prompt_complete that never made it to disk). Walk every turn and
+      // finalize any thinking pane that is still in its active/blinking state
+      // so the dots stop animating. Then close out the final active turn so
+      // the assistant bubble is finalized too.
+      for (const turn of this.turns) {
+        if (turn.thinking && typeof turn.thinking.finalize === 'function') {
+          turn.thinking.finalize();
+        }
+      }
+      if (this.activeTurn) this.endTurn(null);
       // Scroll the stream to the bottom after a history load. Reset
       // auto-scroll: the user just opened the conversation, they want to be
       // at the latest message regardless of where the last session ended.
@@ -1550,6 +1561,7 @@ export class ChatView {
   handleEvent(name, payload, opts) {
     const data = unwrap(payload);
     switch (name) {
+      case 'user_message':              return this.onUserMessage(data);
       case 'agent_message_chunk':       return this.onMessageChunk(data);
       case 'agent_thought_chunk':       return this.onThoughtChunk(data);
       case 'tool_call':                 return this.onToolCall(data, opts);
@@ -1961,25 +1973,37 @@ export class ChatView {
   }
 
   _buildSettingsDrawer() {
-    // Each row is built as a small helper so we can wire .value into a map
-    // for save-time collection without manually plumbing each one.
+    // Each field is built once, then stitched into grouped sections. We keep
+    // the .value plumbing in a flat `fields` map so save-time collection is
+    // just a dictionary walk.
     const fields = {};
 
-    const labeledRow = (key, labelText, input, hintText) => {
-      fields[key] = input;
-      const row = el('div', { class: 'sd-row' },
+    // ---- field factory --------------------------------------------------
+    const field = (key, labelText, input, hintText) => {
+      if (key) fields[key] = input;
+      return el('div', { class: 'sd-field' },
         el('label', { class: 'sd-label' }, labelText),
         input,
         hintText ? el('div', { class: 'sd-hint' }, hintText) : null,
       );
-      return row;
     };
+    const onDirty = (input) => {
+      const evt = (input.tagName === 'SELECT' || input.type === 'checkbox') ? 'change' : 'input';
+      input.addEventListener(evt, () => this._markSettingsDirty());
+    };
+
+    // ---- inputs ---------------------------------------------------------
+    const nameInput = el('input', {
+      class: 'sd-input',
+      type: 'text',
+      placeholder: 'optional agent name',
+    });
 
     const modelInput = el('input', {
       class: 'sd-input',
       type: 'text',
       list: 'chat-settings-model-list',
-      placeholder: 'e.g. grok-code-fast-1 (leave blank for default)',
+      placeholder: 'e.g. grok-code-fast-1',
     });
     const reasoningSelect = el('select', { class: 'sd-input' },
       el('option', { value: '' }, 'default'),
@@ -1990,82 +2014,70 @@ export class ChatView {
       el('option', { value: 'high' }, 'high'),
       el('option', { value: 'xhigh' }, 'xhigh'),
     );
+
     const systemPromptTa = el('textarea', {
-      class: 'sd-input sd-textarea',
-      rows: '4',
-      placeholder: 'replace the agent system prompt entirely (leave blank to keep default).',
+      class: 'sd-input sd-textarea sd-textarea--lg',
+      rows: '5',
+      placeholder: 'leave blank to keep default.',
     });
     const rulesTa = el('textarea', {
-      class: 'sd-input sd-textarea',
-      rows: '4',
-      placeholder: 'extra rules appended to the system prompt (one per line is fine).',
+      class: 'sd-input sd-textarea sd-textarea--lg',
+      rows: '5',
+      placeholder: 'one rule per line.',
     });
+
     const toolsInput = el('input', {
       class: 'sd-input',
       type: 'text',
-      placeholder: 'comma-separated, e.g. read_file,grep,list_dir',
+      placeholder: 'read_file,grep,list_dir',
     });
     const disallowedInput = el('input', {
       class: 'sd-input',
       type: 'text',
-      placeholder: 'comma-separated, e.g. web_search,run_terminal_cmd',
+      placeholder: 'web_search,run_terminal_cmd',
     });
+
     const allowTa = el('textarea', {
       class: 'sd-input sd-textarea',
-      rows: '3',
-      placeholder: 'one rule per line, e.g. Bash(npm*)',
+      rows: '4',
+      placeholder: 'Bash(npm*)',
     });
     const denyTa = el('textarea', {
       class: 'sd-input sd-textarea',
-      rows: '3',
-      placeholder: 'one rule per line, e.g. Bash(rm*)  (deny wins over allow)',
+      rows: '4',
+      placeholder: 'Bash(rm*)',
     });
-
-    const worktreeCheckbox = el('input', {
-      class: 'sd-checkbox',
-      type: 'checkbox',
-    });
-    const worktreeName = el('input', {
-      class: 'sd-input sd-input--inline',
-      type: 'text',
-      placeholder: 'optional name',
-    });
-    const worktreeRow = el('div', { class: 'sd-row' },
-      el('label', { class: 'sd-label' },
-        worktreeCheckbox,
-        el('span', null, ' Run inside a new git worktree'),
-      ),
-      worktreeName,
-      el('div', { class: 'sd-hint' },
-        'Equivalent to `-w` (or `-w <name>` when filled).'),
-    );
-    fields.worktree = worktreeCheckbox;
-    fields.worktreeName = worktreeName;
 
     const sandboxInput = el('input', {
       class: 'sd-input',
       type: 'text',
-      placeholder: 'sandbox profile name',
+      placeholder: 'sandbox profile',
     });
+    const worktreeInput = el('input', {
+      class: 'sd-input',
+      type: 'text',
+      placeholder: 'worktree path or name',
+    });
+    fields.worktree = worktreeInput;
 
     const alwaysApproveCheckbox = el('input', {
       class: 'sd-checkbox',
       type: 'checkbox',
     });
     alwaysApproveCheckbox.checked = true;
-    const alwaysApproveRow = el('div', { class: 'sd-row' },
-      el('label', { class: 'sd-label' },
-        alwaysApproveCheckbox,
-        el('span', null, ' Always approve tool calls (YOLO)'),
-      ),
-      el('div', { class: 'sd-hint' },
-        'On by default. Disabling it makes the agent prompt for permission before every tool call.'),
-    );
     fields.alwaysApprove = alwaysApproveCheckbox;
+
+    // Wire dirty tracking on every interactive control.
+    for (const inp of [
+      nameInput, modelInput, reasoningSelect, systemPromptTa, rulesTa,
+      toolsInput, disallowedInput, allowTa, denyTa, sandboxInput,
+      worktreeInput, alwaysApproveCheckbox,
+    ]) onDirty(inp);
 
     const dataList = el('datalist', { id: 'chat-settings-model-list' });
     this._modelDatalist = dataList;
 
+    // ---- buttons --------------------------------------------------------
     const saveBtn = el('button', {
       class: 'btn btn--primary sd-save',
       type: 'button',
@@ -2081,23 +2093,81 @@ export class ChatView {
       class: 'btn btn--ghost sd-close',
       type: 'button',
       onclick: () => this.closeSettingsDrawer(),
-    }, 'close');
+    }, 'cancel');
 
     const notice = el('div', { class: 'sd-notice hidden' });
     this._sdNotice = notice;
+    const dirtyNotice = el('div', { class: 'sd-dirty hidden' },
+      'unsaved changes. reconnect required for new flags to apply.');
+    this._sdDirtyNotice = dirtyNotice;
+
+    // ---- sections -------------------------------------------------------
+    const section = (title, ...children) => el('section', { class: 'sd-section' },
+      el('div', { class: 'sd-section-title' }, title),
+      ...children,
+    );
+
+    const identitySection = section('Identity',
+      field('name', 'Name', nameInput,
+        'optional agent name (used in sidebar + tab title).'),
+    );
+
+    const modelSection = section('Model',
+      el('div', { class: 'sd-grid' },
+        field('model', 'Model', modelInput,
+          'overrides the global default. blank = use default.'),
+        field('reasoningEffort', 'Reasoning effort', reasoningSelect,
+          'none | minimal | low | medium | high | xhigh.'),
+      ),
+      el('label', { class: 'sd-toggle' },
+        alwaysApproveCheckbox,
+        el('span', { class: 'sd-toggle-text' }, 'always approve tool calls'),
+        el('span', { class: 'sd-toggle-hint' },
+          'auto-approve every tool call (default on).'),
+      ),
+    );
+
+    const promptSection = section('System prompt',
+      field('systemPromptOverride', 'System prompt override', systemPromptTa,
+        'replaces the agent system prompt entirely (leave blank to keep default).'),
+      field('rules', 'Rules', rulesTa,
+        'extra rules appended to the system prompt.'),
+    );
+
+    const toolsSection = section('Tools',
+      el('div', { class: 'sd-grid' },
+        field('tools', 'Allowed tools', toolsInput,
+          'comma-separated allowed tools.'),
+        field('disallowedTools', 'Disallowed tools', disallowedInput,
+          'comma-separated blocked tools.'),
+      ),
+    );
+
+    const permsSection = section('Permissions',
+      el('div', { class: 'sd-grid' },
+        field('allow', 'Allow', allowTa,
+          'one rule per line, e.g. Bash(npm*).'),
+        field('deny', 'Deny', denyTa,
+          'one rule per line; deny wins over allow.'),
+      ),
+    );
+
+    const envSection = section('Environment',
+      el('div', { class: 'sd-grid' },
+        field('sandbox', 'Sandbox profile', sandboxInput,
+          'sandbox profile name.'),
+        field(null, 'Worktree', worktreeInput,
+          'spawn into an existing worktree dir (-w <path>).'),
+      ),
+    );
 
     const body = el('div', { class: 'sd-body' },
-      labeledRow('model', 'Model', modelInput, 'Top-level `-m` override. Blank = whatever the CLI defaults to.'),
-      labeledRow('reasoningEffort', 'Reasoning effort', reasoningSelect, 'Maps to `--reasoning-effort`.'),
-      labeledRow('systemPromptOverride', 'System prompt override', systemPromptTa, 'Maps to `--system-prompt-override`. Replaces the entire system prompt.'),
-      labeledRow('rules', 'Rules', rulesTa, 'Maps to `--rules`. Appended after the system prompt.'),
-      labeledRow('tools', 'Allowed tools', toolsInput, 'Maps to `--tools`. Comma-separated; turns off default tool injection.'),
-      labeledRow('disallowedTools', 'Disallowed tools', disallowedInput, 'Maps to `--disallowed-tools`. Comma-separated.'),
-      labeledRow('allow', 'Permission allow rules', allowTa, 'Maps to repeated `--allow`. One rule per line.'),
-      labeledRow('deny', 'Permission deny rules', denyTa, 'Maps to repeated `--deny`. One rule per line. Deny wins over allow.'),
-      worktreeRow,
-      labeledRow('sandbox', 'Sandbox profile', sandboxInput, 'Maps to `--sandbox`.'),
-      alwaysApproveRow,
+      identitySection,
+      modelSection,
+      promptSection,
+      toolsSection,
+      permsSection,
+      envSection,
       dataList,
     );
 
@@ -2105,13 +2175,14 @@ export class ChatView {
       el('h3', { class: 'sd-title' }, 'Conversation settings'),
       el('div', { class: 'sd-sub' },
         'Per-conversation overrides for ', el('code', null, 'grok'),
-        ' top-level flags. Applied on the next time this agent (re)connects.'),
+        ' top-level flags. Applied the next time this agent (re)connects.'),
       notice,
     );
 
     const foot = el('footer', { class: 'sd-foot' },
-      resetBtn,
+      dirtyNotice,
       el('span', { class: 'sd-foot-spacer' }),
+      resetBtn,
       closeBtn,
       saveBtn,
     );
@@ -2124,6 +2195,7 @@ export class ChatView {
     const drawer = el('div', { class: 'chat-settings-drawer' }, backdrop, card);
 
     this._sdFields = fields;
+    this._sdNameInput = nameInput;
     this.settingsDrawer = drawer;
     this.root.appendChild(drawer);
   }
@@ -2140,6 +2212,9 @@ export class ChatView {
     if (!this._sdFields) return;
     const s = (agent && agent.settings) || {};
     const f = this._sdFields;
+    if (this._sdNameInput) {
+      this._sdNameInput.value = typeof (agent && agent.name) === 'string' ? agent.name : '';
+    }
     f.model.value                = typeof s.model === 'string' ? s.model : '';
     f.reasoningEffort.value      = typeof s.reasoningEffort === 'string' ? s.reasoningEffort : '';
     f.systemPromptOverride.value = typeof s.systemPromptOverride === 'string' ? s.systemPromptOverride : '';
@@ -2150,22 +2225,27 @@ export class ChatView {
     f.deny.value                 = Array.isArray(s.deny)  ? s.deny.join('\n')  : '';
     f.sandbox.value              = typeof s.sandbox === 'string' ? s.sandbox : '';
     if (typeof s.worktree === 'string' && s.worktree.length) {
-      f.worktree.checked = true;
-      f.worktreeName.value = s.worktree;
-    } else if (s.worktree === true) {
-      f.worktree.checked = true;
-      f.worktreeName.value = '';
+      f.worktree.value = s.worktree;
     } else {
-      f.worktree.checked = false;
-      f.worktreeName.value = '';
+      f.worktree.value = '';
     }
     // alwaysApprove defaults to true if not set.
     f.alwaysApprove.checked = !(s.alwaysApprove === false);
+
+    // Reset the dirty flag now that the form mirrors the saved state.
+    this._sdDirty = false;
+    if (this._sdDirtyNotice) this._sdDirtyNotice.classList.add('hidden');
 
     // Live-connected agents need a reconnect before the new settings take
     // effect. Show a small banner explaining that. Mirrors the agent state
     // we track via the sidebar refresh event.
     this._updateSettingsNotice(agent);
+  }
+
+  _markSettingsDirty() {
+    if (this._sdDirty) return;
+    this._sdDirty = true;
+    if (this._sdDirtyNotice) this._sdDirtyNotice.classList.remove('hidden');
   }
 
   _updateSettingsNotice(agent) {
@@ -2199,12 +2279,8 @@ export class ChatView {
       sandbox:              f.sandbox.value.trim(),
       alwaysApprove:        !!f.alwaysApprove.checked,
     };
-    if (f.worktree.checked) {
-      const wn = f.worktreeName.value.trim();
-      out.worktree = wn ? wn : true;
-    } else {
-      out.worktree = null;
-    }
+    const wn = (f.worktree.value || '').trim();
+    out.worktree = wn ? wn : null;
     // Drop empty values so the saved payload stays minimal.
     for (const k of Object.keys(out)) {
       const v = out[k];
@@ -2218,14 +2294,22 @@ export class ChatView {
   async _submitSettingsDrawer() {
     if (!this.agentId || !this._sdFields) return;
     const settings = this._collectSettings();
+    const patch = { settings };
+    if (this._sdNameInput) {
+      const nv = this._sdNameInput.value.trim();
+      const current = (this.currentAgent && this.currentAgent.name) || '';
+      if (nv !== current) patch.name = nv;
+    }
     const saveBtn = this.settingsDrawer && this.settingsDrawer.querySelector('.sd-save');
     if (saveBtn) {
       saveBtn.disabled = true;
       saveBtn.textContent = 'saving...';
     }
     try {
-      const updated = await api.updateAgent(this.agentId, { settings });
+      const updated = await api.updateAgent(this.agentId, patch);
       this.applyAgentRefresh(updated);
+      this._sdDirty = false;
+      if (this._sdDirtyNotice) this._sdDirtyNotice.classList.add('hidden');
       this.showToast('conversation settings saved.', 'info');
       this.closeSettingsDrawer();
     } catch (e) {
