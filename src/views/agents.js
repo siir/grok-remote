@@ -75,16 +75,8 @@ export class AgentsSidebar {
       onclick: () => document.dispatchEvent(new CustomEvent('grok-remote:close-drawer')),
     }, '×');
 
-    // Desktop collapse button. Hidden on mobile (where the drawer model
-    // takes over). Dispatches the same event the topbar collapse button
-    // does, so both entry points share the same wiring in main.js.
-    this.sidebarCollapseBtn = el('button', {
-      class: 'sidebar-collapse-btn',
-      type: 'button',
-      title: 'collapse sidebar',
-      'aria-label': 'collapse sidebar',
-      onclick: () => document.dispatchEvent(new CustomEvent('grok-remote:sidebar-toggle')),
-    }, '⟨');
+    // (The collapse-sidebar button now lives in the topbar so it stays
+    // reachable when the sidebar itself is hidden. See main.js.)
 
     this.archivedToggle = el('button', {
       class: 'agents-archived-toggle',
@@ -138,7 +130,6 @@ export class AgentsSidebar {
       el('div', { class: 'sidebar-head' },
         el('span', { class: 'sidebar-title' }, 'agents'),
         this.newBtn,
-        this.sidebarCollapseBtn,
         this.closeDrawerBtn,
       ),
       el('div', { class: 'sidebar-tools' },

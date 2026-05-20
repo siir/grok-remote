@@ -111,6 +111,30 @@ export const ICONS = {
     <path d="M10 2.5 12.4 7.4 17.8 8.2 13.9 12 14.8 17.3 10 14.9 5.2 17.3 6.1 12 2.2 8.2 7.6 7.4z"/>
   `),
 
+  // Sidebar / panel toggles. Mirror the Lucide panel-left/right icon family
+  // so users see a clear "this is a side panel toggle" affordance. The
+  // chevron inside indicates the action the click will perform.
+  'panel-left-open': wrap(`
+    <rect x="2.5" y="2.5" width="15" height="15" rx="2"/>
+    <path d="M7 2.5v15"/>
+    <path d="m11 7.5 2.5 2.5L11 12.5"/>
+  `),
+  'panel-left-close': wrap(`
+    <rect x="2.5" y="2.5" width="15" height="15" rx="2"/>
+    <path d="M7 2.5v15"/>
+    <path d="m13.5 7.5L11 10l2.5 2.5"/>
+  `),
+  'panel-right-open': wrap(`
+    <rect x="2.5" y="2.5" width="15" height="15" rx="2"/>
+    <path d="M13 2.5v15"/>
+    <path d="m9 7.5L6.5 10 9 12.5"/>
+  `),
+  'panel-right-close': wrap(`
+    <rect x="2.5" y="2.5" width="15" height="15" rx="2"/>
+    <path d="M13 2.5v15"/>
+    <path d="m6.5 7.5 2.5 2.5-2.5 2.5"/>
+  `),
+
   // globe (worldwide web) for "Open App" affordance on bg dev-server chips
   globe: wrap(`
     <circle cx="10" cy="10" r="7"/>

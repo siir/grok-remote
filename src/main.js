@@ -202,6 +202,7 @@ function mountDashboard() {
   shell.appendChild(splitHost);
 
   installOuterSplit(splitHost, sidebarPane, mainPane);
+  installToolsToggle();
 
   // hook up settings button in topbar
   const settingsBtn = document.getElementById('open-settings');
@@ -414,8 +415,33 @@ function isSidebarCollapsed() {
   try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { return false; }
 }
 
+function installToolsToggle() {
+  const btn = document.getElementById('topbar-sidebar-right');
+  if (!btn) return;
+  if (isMobileViewport()) {
+    btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  let collapsed = false;
+  function paint() {
+    btn.innerHTML = iconHtml(collapsed ? 'panel-right-open' : 'panel-right-close');
+    btn.title = collapsed ? 'show tool calls panel' : 'hide tool calls panel';
+    btn.setAttribute('aria-label', btn.title);
+  }
+  paint();
+  btn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    document.dispatchEvent(new CustomEvent('grok-remote:tools-toggle'));
+  });
+  document.addEventListener('grok-remote:tools-state', (ev) => {
+    collapsed = !!(ev && ev.detail && ev.detail.collapsed);
+    paint();
+  });
+}
+
 function installOuterSplit(splitHost, sidebarPane, mainPane) {
-  const topbarBtn = document.getElementById('topbar-sidebar-toggle');
+  const topbarBtn = document.getElementById('topbar-sidebar-left');
 
   // Mobile: skip Split.js entirely. The sidebar drawer is driven by CSS +
   // body[data-drawer-open]. Reload on threshold cross to re-init cleanly.
@@ -447,9 +473,9 @@ function installOuterSplit(splitHost, sidebarPane, mainPane) {
 
   function updateTopbarBtn() {
     if (!topbarBtn) return;
-    topbarBtn.textContent = collapsed ? '⟩' : '⟨';
-    topbarBtn.title = collapsed ? 'expand sidebar' : 'collapse sidebar';
-    topbarBtn.setAttribute('aria-label', collapsed ? 'expand sidebar' : 'collapse sidebar');
+    topbarBtn.innerHTML = iconHtml(collapsed ? 'panel-left-open' : 'panel-left-close');
+    topbarBtn.title = collapsed ? 'show conversations sidebar' : 'hide conversations sidebar';
+    topbarBtn.setAttribute('aria-label', collapsed ? 'show conversations sidebar' : 'hide conversations sidebar');
   }
 
   function buildSplit(initialSizes) {

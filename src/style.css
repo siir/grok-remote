@@ -1303,13 +1303,11 @@ body::before {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* Fully hide the tools column when collapsed. The topbar's right-side
+   panel button is the entry point to bring it back. */
 .chat-split--tools-collapsed > .chat-tools-col {
-  flex: 0 0 36px;
-  min-width: 36px;
+  display: none;
 }
-.chat-split--tools-collapsed > .chat-tools-col .chat-tools-col__title { display: none; }
-.chat-split--tools-collapsed > .chat-tools-col .chat-tools-stream { display: none; }
-.chat-split--tools-collapsed > .chat-tools-col .chat-tools-col__head { padding: 6px 4px; }
 
 /* Per-turn grouping in the tools column: a small header showing the
    user-message snippet that triggered this batch of tool calls. */
@@ -3848,17 +3846,40 @@ body::before {
   position: relative;
 }
 
-/* Topbar "collapse sidebar" toggle. Mirrors the look of .topbar-btn but
-   sized for a single-glyph control. Hidden on mobile (the sidebar there
-   is the off-canvas drawer, which is driven by the hamburger). */
-.topbar-sidebar-toggle {
-  padding: 5px 8px;
-  font-size: 13px;
+/* Topbar panel toggle buttons. Two: one top-left (conversations sidebar),
+   one top-right (tools panel). When their target is hidden, these are the
+   only way to bring it back. Always visible on desktop; the icon updates
+   to reflect current state (panel-left-open vs panel-left-close, etc.). */
+.topbar-panel-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
   line-height: 1;
-  min-width: 28px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.topbar-panel-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.topbar-panel-btn:hover {
+  color: var(--teal);
+  border-color: var(--teal);
+  background: rgba(94, 234, 212, 0.08);
+}
+.topbar-panel-btn--left {
+  margin-right: 4px;
+}
+.topbar-panel-btn--right {
+  margin-right: 4px;
 }
 @media (max-width: 720px) {
-  .topbar-sidebar-toggle { display: none !important; }
+  .topbar-panel-btn { display: none !important; }
 }
 .left-rail {
   background: var(--bg);

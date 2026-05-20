@@ -173,6 +173,23 @@ export class ChatView {
     // user navigates between routes).
     this._destroyChatSplit();
     this._initChatSplit();
+    // External topbar button toggles tools panel via this event. Keep one
+    // listener for the document lifetime by guarding with a flag.
+    if (!ChatView._toolsToggleWired) {
+      document.addEventListener('grok-remote:tools-toggle', () => {
+        // Ask the active ChatView to toggle; we walk to the one mounted.
+        // Simplest path: dispatch a DOM event from the toggle btn the
+        // chat view already owns. Use a custom hook on the class.
+        if (ChatView._active) ChatView._active._toggleToolsCol();
+      });
+      ChatView._toolsToggleWired = true;
+    }
+    ChatView._active = this;
+    // Initial state push so the topbar button paints correctly right after
+    // mount, before any user toggle happens.
+    document.dispatchEvent(new CustomEvent('grok-remote:tools-state', {
+      detail: { collapsed: !!this._chatSplitCollapsed },
+    }));
   }
 
   destroy() {
@@ -1420,6 +1437,10 @@ export class ChatView {
   _applyChatSplitCollapsedClass() {
     if (!this.chatSplitEl) return;
     this.chatSplitEl.classList.toggle('chat-split--tools-collapsed', !!this._chatSplitCollapsed);
+    // Notify the topbar so its right-side panel icon can reflect state.
+    document.dispatchEvent(new CustomEvent('grok-remote:tools-state', {
+      detail: { collapsed: !!this._chatSplitCollapsed },
+    }));
   }
 
   _updateToolsToggleLabel() {
