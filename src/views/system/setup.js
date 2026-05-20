@@ -22,9 +22,14 @@ export function mount(container) {
       'servers + skill definitions) and merges it into your local config ',
       'while preserving user-only fields.'),
     el('p', null,
-      'Re-running is idempotent: the same bundle will not be reapplied. ',
-      'If you are an individual user with no managed deployment, this is ',
-      'effectively a no-op and safe to run at any time.'),
+      'Re-running is idempotent: the same bundle will not be reapplied.'),
+    el('p', null,
+      'If you have no managed deployment configured (no ',
+      el('code', null, 'GROK_DEPLOYMENT_KEY'),
+      ' set and no ', el('code', null, '[endpoints].deployment_key'),
+      ' in ', el('code', null, '~/.grok/config.toml'),
+      '), grok will exit with an error explaining that. The dashboard ',
+      'treats that as informational rather than a failure.'),
     el('p', { class: 'setup-desc-foot' },
       'After the run completes, ', el('code', null, 'grok inspect --json'),
       ' is invoked automatically so you can see the resulting configuration.'),
@@ -101,22 +106,44 @@ function renderResult(host, status, data) {
       `unexpected response from server (HTTP ${status})`));
     return;
   }
-  const ok = !!data.ok;
-  const head = el('div', { class: `setup-result-head setup-result-head--${ok ? 'ok' : 'fail'}` },
-    el('span', { class: 'setup-result-badge' }, ok ? 'success' : 'failed'),
-    el('span', { class: 'setup-result-summary' },
-      ok
-        ? `grok setup completed (exit ${data.exitCode ?? 0}).`
-        : `grok setup failed (exit ${data.exitCode ?? '?'}): ${data.error || 'unknown error'}`,
-    ),
+  const kind = typeof data.kind === 'string' ? data.kind : (data.ok ? 'ok' : 'error');
+  const exit = data.exitCode ?? '?';
+  // Prefer the first real line of stderr/stdout (server returns this as
+  // data.summary) over the generic GrokCliError message, which is just
+  // "grok exited with code N" and tells the user nothing.
+  const summary = (typeof data.summary === 'string' && data.summary)
+    || data.error
+    || 'unknown error';
+
+  let badge, headline, headMod;
+  if (kind === 'ok') {
+    badge    = 'success';
+    headMod  = 'ok';
+    headline = `grok setup completed (exit ${exit}).`;
+  } else if (kind === 'no-deployment-key') {
+    badge    = 'info';
+    headMod  = 'info';
+    headline = `no managed deployment configured (exit ${exit}). This is expected for individual users.`;
+  } else {
+    badge    = 'failed';
+    headMod  = 'fail';
+    headline = `grok setup failed (exit ${exit}): ${summary}`;
+  }
+
+  const head = el('div', { class: `setup-result-head setup-result-head--${headMod}` },
+    el('span', { class: 'setup-result-badge' }, badge),
+    el('span', { class: 'setup-result-summary' }, headline),
   );
   host.appendChild(head);
 
-  if (data.stdout) {
-    host.appendChild(buildOutputBlock('stdout', data.stdout));
-  }
+  // Always show stderr/stdout when present so the user can see what the CLI
+  // actually said, regardless of whether we classified the outcome as ok,
+  // info, or error.
   if (data.stderr) {
     host.appendChild(buildOutputBlock('stderr', data.stderr));
+  }
+  if (data.stdout) {
+    host.appendChild(buildOutputBlock('stdout', data.stdout));
   }
 
   // Post-setup inspect block. If inspect failed we still surface the error so

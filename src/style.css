@@ -6380,6 +6380,10 @@ body::before {
   color: var(--red, var(--amber, var(--muted)));
   border-color: var(--red, var(--amber, var(--muted)));
 }
+.setup-result-head--info .setup-result-badge {
+  color: var(--blue, var(--teal, var(--muted)));
+  border-color: var(--blue, var(--teal, var(--muted)));
+}
 .setup-result-badge {
   display: inline-block;
   padding: 2px 8px;
