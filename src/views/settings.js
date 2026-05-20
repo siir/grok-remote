@@ -62,7 +62,7 @@ export class SettingsView {
 
       this.field('history retention (days)',
         this.retentionInput,
-        'preferred lifetime for agent history under ~/.grok-remote/agents/. saved as a preference; periodic cleanup not yet enforced.'),
+        'agent history under ~/.grok-remote/agents/ is pruned when last activity exceeds this. starred agents are never pruned. 0 disables cleanup. default 30.'),
 
       this.field('theme',
         this.themePicker,

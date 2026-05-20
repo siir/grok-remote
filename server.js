@@ -14,6 +14,7 @@ import os from 'node:os';
 
 import { AgentManager } from './lib/agent-manager.js';
 import { load as loadSettings, save as saveSettings } from './lib/settings.js';
+import { startRetentionTimer } from './lib/retention.js';
 import { readAll as readHistory } from './lib/history.js';
 import { writeHeaders as sseHeaders, writeEvent as sseWrite, writePing as ssePing } from './lib/sse.js';
 import { buildTrace } from './lib/trace-host.js';
@@ -668,12 +669,20 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res);
 });
 
+const retention = startRetentionTimer({ getSettings: loadSettings, manager });
+
 server.listen(PORT, HOST, () => {
   const ts = tailscaleIdentity();
   const where = ts?.dns ? `http://${ts.dns}:${PORT}` : `http://${HOST}:${PORT}`;
   console.log(`[grok-remote] listening on ${HOST}:${PORT}`);
   console.log(`[grok-remote] tailnet url: ${where}`);
 });
+
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    try { retention.stop(); } catch { /* ignore */ }
+  });
+}
 
 let shuttingDown = false;
 async function shutdown(signal) {

@@ -2918,6 +2918,11 @@ body::before {
     overflow-x: auto;
   }
   .left-rail-item { flex: 0 0 auto; }
+  .system-page {
+    padding: 14px 14px 40px;
+    gap: 14px;
+  }
+  .system-page-title { font-size: 15px; }
 }
 
 /* ===== feature page sections (sub-agents append below their marker) ===== */
