@@ -109,8 +109,25 @@ export const api = {
   },
 
   skills: {
-    list:     ()      => request('GET', '/api/system/skills'),
-    read:     (path)  => request('GET', `/api/system/skills/read?path=${encodeURIComponent(path)}`),
+    list:     (opts) => {
+      const qs = new URLSearchParams();
+      if (opts && opts.includeArchived) qs.set('includeArchived', '1');
+      const tail = qs.toString();
+      return request('GET', `/api/system/skills${tail ? `?${tail}` : ''}`);
+    },
+    read:        (path)            => request('GET',  `/api/system/skills/read?path=${encodeURIComponent(path)}`),
+    archive:     (scope, name)     => request('POST', '/api/system/skills/archive', { scope, name }),
+    restore:     (scope, name)     => request('POST', '/api/system/skills/restore', { scope, name }),
+    move:        (scope, name, toScope) => request('POST', '/api/system/skills/move', { scope, name, toScope }),
+    saveContent: (scope, name, content) => request('PUT',  '/api/system/skills/content', { scope, name, content }),
+    history:     (scope, name)     => request('GET',
+      `/api/system/skills/history?scope=${encodeURIComponent(scope)}&name=${encodeURIComponent(name)}`),
+    historySnapshot: (scope, name, ts) => request('GET',
+      `/api/system/skills/history/content?scope=${encodeURIComponent(scope)}&name=${encodeURIComponent(name)}&ts=${encodeURIComponent(ts)}`),
+    historyRestore: (scope, name, ts) => request('POST',
+      '/api/system/skills/history/restore', { scope, name, ts }),
+    use:        (name, agentId)    => request('POST', '/api/system/skills/use', { name, ...(agentId ? { agentId } : {}) }),
+    usage:      ()                 => request('GET',  '/api/system/skills/usage'),
   },
 
   systemModels: {
