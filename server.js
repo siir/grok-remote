@@ -27,6 +27,13 @@ const DIST = path.join(ROOT, 'dist');
 const PORT = parseInt(process.env.PORT || '7910', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
+const APP_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
+  } catch { return '0.0.0'; }
+})();
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js':   'text/javascript; charset=utf-8',
@@ -125,7 +132,7 @@ async function handleApi(req, res, url, method) {
     return sendJson(res, 200, {
       ok: true,
       app: 'grok-remote',
-      version: '0.1.0',
+      version: APP_VERSION,
       message: 'remote up. agent endpoints land here soon.',
       now: new Date().toISOString(),
       uptime_seconds: Math.floor(process.uptime()),
@@ -137,7 +144,7 @@ async function handleApi(req, res, url, method) {
   }
 
   if (url === '/api/health' && method === 'GET') {
-    return sendJson(res, 200, { ok: true, uptime_seconds: Math.floor(process.uptime()) });
+    return sendJson(res, 200, { ok: true, version: APP_VERSION, uptime_seconds: Math.floor(process.uptime()) });
   }
 
   if (url === '/api/settings' && method === 'GET') {

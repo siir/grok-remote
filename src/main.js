@@ -330,6 +330,15 @@ function mountDashboard() {
   // shows a pulsing amber dot whenever at least one agent has inFlight > 0
   // or is running. The title prefix surfaces activity in browser tabs and
   // the dock when the dashboard is fully out of view.
+  // Stamp the brand-version span from the package.json version baked in by
+  // Vite at build time. Falls back to the hardcoded HTML value if for some
+  // reason the define didn't fire.
+  const brandVersion = document.getElementById('brand-version');
+  if (brandVersion && typeof __APP_VERSION__ === 'string' && __APP_VERSION__) {
+    brandVersion.textContent = 'v' + __APP_VERSION__;
+    brandVersion.title = `grok-remote v${__APP_VERSION__}`;
+  }
+
   const brandActive = document.getElementById('brand-active');
   const baseTitle = document.title;
   document.addEventListener('grok-remote:agents-refresh', (ev) => {

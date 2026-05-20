@@ -726,12 +726,6 @@ export class ChatView {
     const cwd       = agent.cwd       || '';
     const totalToks = this.latestTotalTokens != null ? this.latestTotalTokens : (agent.totalTokens != null ? agent.totalTokens : null);
 
-    const truncate = (s, n) => {
-      if (!s) return '';
-      const str = String(s);
-      if (str.length <= n) return str;
-      return `${str.slice(0, Math.max(0, n - 1))}...`;
-    };
     const copyValueBtn = (val, label) => {
       const btn = el('button', {
         class: 'info-copy',
@@ -753,8 +747,8 @@ export class ChatView {
       ['name',     agent.name || '·'],
       ['status',   agent.status || '·'],
       ['model',    agent.model || '·'],
-      ['session',  sessionId || 'Pending handshake...', sessionId ? { copy: sessionId, truncated: truncate(sessionId, 32) } : null],
-      ['cwd',      cwd || '·',                          cwd       ? { copy: cwd,       truncated: truncate(cwd, 48)       } : null],
+      ['session',  sessionId || 'Pending handshake...', sessionId ? { copy: sessionId } : null],
+      ['cwd',      cwd || '·',                          cwd       ? { copy: cwd       } : null],
       ['hostname', agent.hostname || '·'],
       ['version',  agent.agentVersion || '·'],
       ['agent id', agent.agentId || agent.id || '·'],
@@ -770,7 +764,7 @@ export class ChatView {
       grid.appendChild(el('div', { class: 'info-k' }, k));
       if (copyOpt && copyOpt.copy) {
         grid.appendChild(el('div', { class: 'info-v info-v--with-copy' },
-          el('span', { class: 'info-v-text', title: copyOpt.copy }, copyOpt.truncated || String(v)),
+          el('span', { class: 'info-v-text' }, String(v)),
           copyValueBtn(copyOpt.copy, k),
         ));
       } else {

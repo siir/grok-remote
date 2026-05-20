@@ -30,8 +30,6 @@ import '@xyflow/react/dist/style.css';
 import { api } from '../../lib/api.js';
 import { fmtTokens } from '../../lib/format.js';
 
-// How long a finished tool-call node lingers on the canvas before fading out.
-const TOOL_NODE_LINGER_MS = 1800;
 // How often we re-poll the agent list. SSE keeps individual cards live; this
 // is only here to pick up newly-spawned or deleted agents.
 const LIST_POLL_MS = 5000;
@@ -105,15 +103,72 @@ function buildSparkPath(history, W, H) {
 }
 
 function ToolNode({ data }) {
-  const status = data.status || 'pending';
+  const status = (data.status || 'pending').toLowerCase();
+  const [open, setOpen] = useState(false);
+  const dur = (data.endedAt && data.startedAt) ? (data.endedAt - data.startedAt) : null;
+  const liveDur = (!data.endedAt && data.startedAt) ? (Date.now() - data.startedAt) : null;
+  const showDur = dur != null ? fmtDuration(dur) : (liveDur != null ? `${fmtDuration(liveDur)}…` : '');
+  const outputText = Array.isArray(data.content) ? data.content.map(c => c.text).join('\n').trim() : '';
+  const hasOutput = !!outputText;
+  const hasInput  = data.rawInput && Object.keys(data.rawInput).length > 0;
+
   return (
-    <div className={`flow-tool-node flow-tool-node--${status.toLowerCase()}`}>
+    <div className={`flow-tool-node flow-tool-node--${status} ${open ? 'flow-tool-node--open' : ''}`}>
       <Handle type="target" position={Position.Left} className="flow-handle" />
       <Handle type="source" position={Position.Left} className="flow-handle" />
-      <div className="flow-tool-node__title" title={data.title}>{data.title || 'tool'}</div>
-      <div className="flow-tool-node__status">{status}</div>
+      <button
+        type="button"
+        className="flow-tool-node__head"
+        onClick={() => setOpen((v) => !v)}
+        title={data.label}
+      >
+        <span className="flow-tool-node__kind">{data.kind || 'tool'}</span>
+        <span className="flow-tool-node__label">{data.label || ''}</span>
+        <span className="flow-tool-node__meta">
+          {showDur && <span className="flow-tool-node__dur">{showDur}</span>}
+          <span className={`flow-tool-node__status flow-tool-node__status--${status}`}>{data.status || 'pending'}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="flow-tool-node__body">
+          {Array.isArray(data.locations) && data.locations.length > 0 && (
+            <div className="flow-tool-node__section">
+              <div className="flow-tool-node__section-title">locations</div>
+              <ul className="flow-tool-node__locs">
+                {data.locations.map((l, i) => (
+                  <li key={i}>{(l && (l.path || l.uri || l.file)) || JSON.stringify(l)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {hasInput && (
+            <div className="flow-tool-node__section">
+              <div className="flow-tool-node__section-title">input</div>
+              <pre className="flow-tool-node__pre">{safeStringify(data.rawInput)}</pre>
+            </div>
+          )}
+          {hasOutput && (
+            <div className="flow-tool-node__section">
+              <div className="flow-tool-node__section-title">output</div>
+              <pre className="flow-tool-node__pre">{outputText}</pre>
+            </div>
+          )}
+          {data.rawOutput != null && (
+            <div className="flow-tool-node__section">
+              <div className="flow-tool-node__section-title">rawOutput</div>
+              <pre className="flow-tool-node__pre">{safeStringify(data.rawOutput)}</pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+function safeStringify(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
 const NODE_TYPES = { agent: AgentNode, tool: ToolNode };
@@ -163,7 +218,6 @@ function FlowInner({ filterIds = null }) {
   // Mutable refs that survive re-renders without re-subscribing effects.
   const streamsRef    = useRef(new Map()); // id -> EventSource
   const pollTimerRef  = useRef(null);
-  const sweepTimerRef = useRef(null);
 
   // Keep `showArchived` reachable from the polling effect without re-running it.
   const showArchivedRef = useRef(showArchived);
@@ -233,33 +287,71 @@ function FlowInner({ filterIds = null }) {
     });
 
     es.addEventListener('tool_call', (ev) => {
-      const data = safeParse(ev.data);
-      if (!data) return;
-      bumpTokens(data);
-      const id     = data.toolCallId || data.id || `tc-${Date.now()}-${Math.random()}`;
-      const title  = data.title || (data.rawInput && data.rawInput.command) || data.kind || 'tool';
-      const status = (data._meta && data._meta.updateParams && data._meta.updateParams.status) || 'Pending';
+      const raw = safeParse(ev.data);
+      if (!raw) return;
+      bumpTokens(raw);
+      // The wire payload from the agent stream is wrapped: { update, _meta, sessionId, _t }.
+      // The actual ACP tool_call object lives in update; some history paths
+      // serve it flat, so accept either.
+      const u = (raw.update && typeof raw.update === 'object') ? raw.update : raw;
+      const id     = u.toolCallId || u.id || `tc-${Date.now()}-${Math.random()}`;
+      const kind   = u.kind || '';
+      const label  = pickToolLabel(u);
+      const status = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.status) || u.status || 'Pending';
+      const startedAt = Date.now();
       patchAgent(agent.id, (cur) => {
-        const calls = { ...cur.calls, [id]: { title, status, expiresAt: null } };
+        const calls = { ...cur.calls, [id]: {
+          id,
+          kind,
+          label,
+          status,
+          rawInput: u.rawInput || null,
+          rawOutput: u.rawOutput || null,
+          content: extractToolContent(u.content),
+          locations: Array.isArray(u.locations) ? u.locations.slice() : [],
+          startedAt,
+          endedAt: null,
+        } };
         return { ...cur, status: 'running', inFlight: countActive(calls), calls };
       });
     });
 
     es.addEventListener('tool_call_update', (ev) => {
-      const data = safeParse(ev.data);
-      if (!data) return;
-      bumpTokens(data);
-      const id      = data.toolCallId || data.id;
-      const status  = (data._meta && data._meta.updateParams && data._meta.updateParams.status)
-                    || data.status || 'Running';
-      const title   = data.title;
-      const done    = status === 'Completed' || status === 'Failed';
+      const raw = safeParse(ev.data);
+      if (!raw) return;
+      bumpTokens(raw);
+      const u = (raw.update && typeof raw.update === 'object') ? raw.update : raw;
+      const id      = u.toolCallId || u.id;
+      if (!id) return;
+      const status  = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.status)
+                    || u.status || 'Running';
+      const done    = (status === 'Completed' || status === 'Failed' || status === 'canceled');
       patchAgent(agent.id, (cur) => {
-        const prev = cur.calls[id] || { title: title || 'tool', status: 'Pending' };
+        const prev = cur.calls[id] || {
+          id,
+          kind: u.kind || '',
+          label: pickToolLabel(u),
+          status: 'Pending',
+          rawInput: null,
+          rawOutput: null,
+          content: [],
+          locations: [],
+          startedAt: Date.now(),
+          endedAt: null,
+        };
+        const nextContent = u.content
+          ? mergeToolContent(prev.content, extractToolContent(u.content))
+          : prev.content;
         const next = {
-          title:  title || prev.title,
+          ...prev,
+          kind: u.kind || prev.kind,
+          label: pickToolLabel(u) || prev.label,
           status,
-          expiresAt: done ? Date.now() + TOOL_NODE_LINGER_MS : null,
+          rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
+          rawOutput: (u.rawOutput != null) ? u.rawOutput : prev.rawOutput,
+          content: nextContent,
+          locations: Array.isArray(u.locations) && u.locations.length ? u.locations.slice() : prev.locations,
+          endedAt: done ? (prev.endedAt || Date.now()) : prev.endedAt,
         };
         const calls = { ...cur.calls, [id]: next };
         return { ...cur, inFlight: countActive(calls), calls };
@@ -369,29 +461,9 @@ function FlowInner({ filterIds = null }) {
     }
   }, [agents, openStreamFor, closeStreamFor]);
 
-  // Periodic sweep to expire faded-out tool nodes.
-  useEffect(() => {
-    sweepTimerRef.current = setInterval(() => {
-      const now = Date.now();
-      setAgentState((prev) => {
-        let changed = false;
-        const out = {};
-        for (const [id, st] of Object.entries(prev)) {
-          const keptCalls = {};
-          for (const [cid, c] of Object.entries(st.calls || {})) {
-            if (c.expiresAt && c.expiresAt < now) { changed = true; continue; }
-            keptCalls[cid] = c;
-          }
-          out[id] = (keptCalls === st.calls) ? st : { ...st, calls: keptCalls, inFlight: countActive(keptCalls) };
-        }
-        return changed ? out : prev;
-      });
-    }, 600);
-    return () => {
-      if (sweepTimerRef.current) clearInterval(sweepTimerRef.current);
-      sweepTimerRef.current = null;
-    };
-  }, []);
+  // No periodic sweep — tool calls persist for the lifetime of this view so
+  // the user can scroll back through the full history. They live on the agent
+  // state map; closing the page clears them.
 
   // Final teardown: close every stream when the component unmounts.
   useEffect(() => {
@@ -427,37 +499,53 @@ function FlowInner({ filterIds = null }) {
 
     const toolNodes = [];
     const toolEdges = [];
+    const COL_WIDTH = 220;
+    const ROW_HEIGHT = 64;
+    const COLS = 4;
     agentNodes.forEach((agentNode) => {
       const st = agentState[agentNode.data.agentId];
       if (!st || !st.calls) return;
-      const callIds = Object.keys(st.calls);
-      callIds.forEach((cid, j) => {
-        const call = st.calls[cid];
-        const fading = !!call.expiresAt;
-        const nodeId = `tool:${agentNode.data.agentId}:${cid}`;
+      // Stable chronological order — sort by startedAt so the chain reads
+      // left-to-right, top-to-bottom even after React re-keys the map.
+      const sortedCalls = Object.values(st.calls).slice().sort((a, b) => {
+        const at = a.startedAt || 0, bt = b.startedAt || 0;
+        return at - bt;
+      });
+      sortedCalls.forEach((call, j) => {
+        const nodeId = `tool:${agentNode.data.agentId}:${call.id}`;
+        const inactive = !!call.endedAt;
         toolNodes.push({
           id: nodeId,
           type: 'tool',
           position: {
-            x: 320 + (j % 3) * 200,
-            y: agentNode.position.y + Math.floor(j / 3) * 70,
+            x: 320 + (j % COLS) * COL_WIDTH,
+            y: agentNode.position.y + Math.floor(j / COLS) * ROW_HEIGHT,
           },
           draggable: false,
-          selectable: false,
-          data: { title: call.title, status: call.status },
-          style: fading ? { opacity: 0.45, transition: 'opacity 400ms ease' } : { opacity: 1 },
+          selectable: true,
+          data: {
+            id: call.id,
+            kind: call.kind,
+            label: call.label,
+            status: call.status,
+            rawInput: call.rawInput,
+            rawOutput: call.rawOutput,
+            content: call.content,
+            locations: call.locations,
+            startedAt: call.startedAt,
+            endedAt: call.endedAt,
+          },
+          style: inactive ? { opacity: 0.85 } : { opacity: 1 },
         });
         toolEdges.push({
           id: `edge:${agentNode.id}->${nodeId}`,
           source: agentNode.id,
           target: nodeId,
-          animated: !fading && (call.status === 'Pending' || call.status === 'Running'),
+          animated: !call.endedAt && (call.status === 'Pending' || call.status === 'Running' || call.status === 'in_progress'),
           style: {
-            stroke: fading
-              ? 'var(--dim)'
-              : (call.status === 'Failed' ? 'var(--red)' : 'var(--teal)'),
-            strokeWidth: 1.5,
-            opacity: fading ? 0.5 : 1,
+            stroke: (call.status === 'Failed' ? 'var(--red)' : (call.endedAt ? 'var(--dim)' : 'var(--teal)')),
+            strokeWidth: 1.2,
+            opacity: call.endedAt ? 0.55 : 1,
           },
         });
       });
@@ -575,9 +663,64 @@ function saveTokenHistory(id, history) {
 function countActive(calls) {
   let n = 0;
   for (const c of Object.values(calls)) {
-    if (!c.expiresAt) n++;
+    if (!c.endedAt) n++;
   }
   return n;
+}
+
+// Extract a short readable label for a tool call from its update object.
+// Prefer the ACP-provided title, then a synthesized one from kind + rawInput.
+function pickToolLabel(u) {
+  if (!u) return 'tool';
+  if (typeof u.title === 'string' && u.title.trim()) return u.title.trim();
+  const ri = u.rawInput;
+  if (ri && typeof ri === 'object') {
+    if (typeof ri.command === 'string' && ri.command.trim()) return ri.command.trim();
+    if (typeof ri.cmd === 'string' && ri.cmd.trim()) return ri.cmd.trim();
+    if (typeof ri.path === 'string' && ri.path.trim()) return `${u.kind || 'tool'}: ${ri.path.trim()}`;
+    if (typeof ri.file_path === 'string' && ri.file_path.trim()) return `${u.kind || 'tool'}: ${ri.file_path.trim()}`;
+    if (typeof ri.url === 'string' && ri.url.trim()) return ri.url.trim();
+  }
+  if (typeof u.kind === 'string' && u.kind.trim()) return u.kind.trim();
+  return 'tool';
+}
+
+// Normalize tool content blocks to a stable shape: [{kind, text}].
+function extractToolContent(content) {
+  if (!content) return [];
+  if (typeof content === 'string') return [{ kind: 'text', text: content }];
+  if (!Array.isArray(content)) return [];
+  return content.map((b) => {
+    if (!b || typeof b !== 'object') return null;
+    if (b.type === 'content' || b.type === 'text') {
+      const inner = (b.content && b.content.text) || b.text || b.content || '';
+      return { kind: 'text', text: typeof inner === 'string' ? inner : JSON.stringify(inner) };
+    }
+    if (b.text) return { kind: 'text', text: String(b.text) };
+    if (b.content && typeof b.content === 'string') return { kind: 'text', text: b.content };
+    return { kind: b.type || 'block', text: JSON.stringify(b) };
+  }).filter(Boolean);
+}
+
+// Concat new content blocks onto existing ones, deduplicating exact matches
+// at the tail so repeated full snapshots don't double up.
+function mergeToolContent(prev, next) {
+  if (!Array.isArray(prev) || !prev.length) return next;
+  if (!Array.isArray(next) || !next.length) return prev;
+  const last = prev[prev.length - 1];
+  if (last && next[0] && last.kind === next[0].kind && last.text === next[0].text) {
+    return prev.concat(next.slice(1));
+  }
+  return prev.concat(next);
+}
+
+function fmtDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
+  const m = Math.floor(ms / 60000);
+  const s = Math.round((ms % 60000) / 1000);
+  return `${m}m${s ? ` ${s}s` : ''}`;
 }
 
 function FlowTotalsOverlay({ agents, agentState }) {
