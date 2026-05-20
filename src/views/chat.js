@@ -1209,7 +1209,7 @@ export class ChatView {
   onToolCallUpdate(data, opts) {
     const turn = this.activeTurn || this.turns[this.turns.length - 1];
     if (!turn) return;
-    const entry = turn.tools.find(t => t.id === data.toolCallId);
+    let entry = turn.tools.find(t => t.id === data.toolCallId);
     if (entry) {
       entry.card.applyUpdate(data);
     } else {
@@ -1218,12 +1218,14 @@ export class ChatView {
       turn.tools.push({ id: data.toolCallId, card });
       turn.root.appendChild(card.node);
       if (!(opts && opts.fromHistory)) this._addInFlight(data, card.node);
+      entry = turn.tools[turn.tools.length - 1];
     }
-    // If this update is terminal, remove from the strip.
-    const status = String(data && data.status || '').toLowerCase();
-    const metaStatus = String((data && data._meta && data._meta.updateParams && data._meta.updateParams.status) || '').toLowerCase();
-    if (['completed','success','succeeded','failed','error','errored','canceled','cancelled'].includes(status) ||
-        ['completed','success','succeeded','failed','error','errored','canceled','cancelled'].includes(metaStatus)) {
+    // Use the card's normalized status (it handles every wire-format variant
+    // including the ACP "in_progress"/"completed" path and the legacy
+    // "_meta.updateParams.status" path). Whatever made the pill render as
+    // green also tells us to clear the chip.
+    const cardStatus = (entry.card.getStatus && entry.card.getStatus() || '').toLowerCase();
+    if (['completed','failed','canceled','cancelled'].includes(cardStatus)) {
       this._removeInFlight(data.toolCallId);
     }
   }
