@@ -1,12 +1,12 @@
 // grok-remote dashboard entry point.
 //
 // Boot sequence:
-//   1. play the hole-to-GR intro animation (preserved from v0.1).
-//   2. once it resolves, mount the dashboard shell (topbar, sidebar, main pane).
-//   3. dispatch between "chat" (per-agent) and "settings" views via a tiny router.
+//   1. mount the dashboard shell (topbar, sidebar, main pane) immediately.
+//   2. dispatch between "chat" (per-agent) and "settings" views via a tiny router.
 //
-// The intro plays once per page load. On subsequent navigations the topbar
-// keeps a small static GR mark.
+// The hole-to-GR animation no longer plays on page load. It now lives in
+// the chat view and plays inside the chat-stream when a fresh conversation
+// is opened (turns.length === 0). The topbar keeps a static GR mark.
 
 import { api } from './lib/api.js';
 import { AgentsSidebar } from './views/agents.js';
@@ -42,126 +42,6 @@ window.addEventListener('storage', (ev) => {
 window.addEventListener('grok-remote:theme-change', () => {
   syncThemeToggle(getTheme());
 });
-
-// ── intro animation ────────────────────────────────────────────────────
-
-const FIGLET_GR = [
-  '  ██████╗ ██████╗  ',
-  ' ██╔════╝ ██╔══██╗ ',
-  ' ██║  ███╗██████╔╝ ',
-  ' ██║   ██║██╔══██╗ ',
-  ' ╚██████╔╝██║  ██║ ',
-  '  ╚═════╝ ╚═╝  ╚═╝ ',
-];
-
-const HOLE_FRAMES = [
-  ['                   ',
-   '                   ',
-   '                   ',
-   '                   ',
-   '                   ',
-   '                   '],
-  ['                   ',
-   '                   ',
-   '         ·         ',
-   '         ·         ',
-   '                   ',
-   '                   '],
-  ['                   ',
-   '        ░░░        ',
-   '       ░   ░       ',
-   '       ░   ░       ',
-   '        ░░░        ',
-   '                   '],
-  ['       ░░░░░       ',
-   '      ░▒▒▒▒▒░      ',
-   '     ░▒▓▓▓▓▓▒░     ',
-   '     ░▒▓▓▓▓▓▒░     ',
-   '      ░▒▒▒▒▒░      ',
-   '       ░░░░░       '],
-  ['     ░░░░░░░░░     ',
-   '    ░▒▒▒▓▓▓▒▒▒░    ',
-   '   ░▒▓▓█████▓▓▒░   ',
-   '   ░▒▓▓█████▓▓▒░   ',
-   '    ░▒▒▒▓▓▓▒▒▒░    ',
-   '     ░░░░░░░░░     '],
-  ['    ░░░░░░░░░░░    ',
-   '  ░▒▒▒▒▓▓▓▓▓▒▒▒▒░  ',
-   ' ░▒▓▓▓███████▓▓▓▒░ ',
-   ' ░▒▓▓▓███████▓▓▓▒░ ',
-   '  ░▒▒▒▒▓▓▓▓▓▒▒▒▒░  ',
-   '    ░░░░░░░░░░░    '],
-  ['    ▓▓▓▓▓▓▓▓▓▓▓    ',
-   '  ▓███████████████ ',
-   ' █████████████████ ',
-   ' █████████████████ ',
-   '  ▓███████████████ ',
-   '    ▓▓▓▓▓▓▓▓▓▓▓    '],
-  ['███████████████████',
-   '███████████████████',
-   '███████████████████',
-   '███████████████████',
-   '███████████████████',
-   '███████████████████'],
-];
-
-const SEQUENCE = [
-  { idx: 0, hold: 60,  phase: 'hole' },
-  { idx: 1, hold: 110, phase: 'hole' },
-  { idx: 2, hold: 110, phase: 'hole' },
-  { idx: 3, hold: 130, phase: 'hole' },
-  { idx: 4, hold: 150, phase: 'hole' },
-  { idx: 5, hold: 280, phase: 'hole' },
-  { idx: 6, hold: 70,  phase: 'pulse' },
-  { idx: 7, hold: 55,  phase: 'flash' },
-];
-
-function cellClass(ch, phase) {
-  if (phase === 'flash') return 'cell-flash';
-  if (phase === 'pulse') return ch === ' ' ? '' : 'cell-flash';
-  if (ch === '·' || ch === '░') return 'cell-rim';
-  if (ch === '▒') return 'cell-mid';
-  if (ch === '▓') return 'cell-deep';
-  if (ch === '█') return 'cell-void';
-  return '';
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
-}
-
-function colorizeLine(line, phase) {
-  let html = '';
-  let runCls = null;
-  let runText = '';
-  const flush = () => {
-    if (!runText) return;
-    if (runCls) html += `<span class="${runCls}">${escapeHtml(runText)}</span>`;
-    else html += escapeHtml(runText);
-    runText = '';
-  };
-  for (const ch of line) {
-    const cls = cellClass(ch, phase);
-    if (cls !== runCls) { flush(); runCls = cls; }
-    runText += ch;
-  }
-  flush();
-  return html;
-}
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-async function playIntro(figletEl) {
-  if (!figletEl) return;
-  figletEl.classList.add('figlet--hole');
-  for (const { idx, hold, phase } of SEQUENCE) {
-    const frame = HOLE_FRAMES[idx];
-    figletEl.innerHTML = frame.map(l => colorizeLine(l, phase)).join('\n');
-    await sleep(hold);
-  }
-  figletEl.classList.remove('figlet--hole');
-  figletEl.textContent = FIGLET_GR.join('\n');
-}
 
 // ── status header ──────────────────────────────────────────────────────
 
@@ -434,22 +314,14 @@ function mountDashboard() {
 // ── boot ───────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const figletEl = document.getElementById('figlet');
-  const introHost = document.getElementById('intro');
-
-  // Kick off api ping in parallel with the intro.
+  // Kick off api ping immediately.
   pingHello();
   setInterval(pingHello, 10000);
 
-  try {
-    await playIntro(figletEl);
-    // brief settle
-    await sleep(140);
-  } catch {}
-
-  // collapse the intro panel and reveal the dashboard
-  if (introHost) introHost.classList.add('intro--collapsed');
-  // Move a tiny static GR mark into the topbar.
+  // Static GR brand mark in the topbar. The full hole-to-GR animation
+  // now lives in the chat view (plays inside the chat-stream when a
+  // fresh conversation is opened); the topbar just shows the settled
+  // letters as a tiny brand mark.
   const topMark = document.getElementById('topbar-mark');
   if (topMark) topMark.textContent = 'GR';
 

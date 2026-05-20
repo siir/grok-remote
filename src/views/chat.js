@@ -32,6 +32,7 @@ import {
 import { copyToClipboard, serializeConversation, serializeResumeCommand } from '../lib/copy.js';
 import { iconHtml } from '../lib/icons.js';
 import { fmtTokens } from '../lib/format.js';
+import { playIntro } from '../lib/intro-animation.js';
 
 export class ChatView {
   constructor() {
@@ -77,6 +78,13 @@ export class ChatView {
       el('div', { class: 'chat-empty-headline' }, 'no agent selected'),
       el('div', { class: 'chat-empty-sub' }, 'pick one from the sidebar or spawn a new one.'),
     );
+
+    // Chat-intro animation state. The hole-to-GR figlet plays inside the
+    // chat-stream when an agent with zero turns is opened (i.e. a brand
+    // new conversation). _chatIntroAbort cancels the running animation
+    // when the first user message lands or the user switches away.
+    this._chatIntroAbort = null;
+    this._chatIntroEl    = null;
 
     // Strip pinned above the chat stream that lists tool calls currently
     // in flight. Each chip shows kind + label + live duration; clicking
@@ -163,6 +171,7 @@ export class ChatView {
 
   destroy() {
     this.closeStream();
+    this._cancelChatIntro();
     if (this.filesMounted) {
       unmountFilesTab();
       this.filesMounted = false;
@@ -706,6 +715,7 @@ export class ChatView {
   setAgent(agent) {
     // agent: { id, ... } or null
     this.closeStream();
+    this._cancelChatIntro();
     this.streamEl.replaceChildren();
     if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
     this.turns = [];
@@ -786,13 +796,70 @@ export class ChatView {
       this.filesMounted = true;
     }
 
+    const agentIdAtCall = agent.id;
     this.refreshHistory()
       .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
       .finally(() => {
+        // Only show the intro if the agent we loaded history for is still
+        // the active one (the user may have switched mid-load), there are
+        // no turns yet (brand new conversation), and no other intro is in
+        // flight. We also gate on activeTurn being null so we don't paint
+        // the intro on top of an SSE event that raced in.
+        if (
+          this.agentId === agentIdAtCall &&
+          (!this.turns || this.turns.length === 0) &&
+          !this.activeTurn &&
+          !this._chatIntroAbort
+        ) {
+          this._playChatIntro();
+        }
         this.openStreamForCurrent();
       });
 
     this.renderInfo(agent);
+  }
+
+  // ── chat intro animation ─────────────────────────────────────────────
+  //
+  // When a brand-new conversation is opened (zero turns), play the
+  // hole-to-GR figlet inside the chat-stream as a welcome moment. The
+  // animation cancels the moment the user sends a message or an SSE
+  // chunk lands (both flow through startTurn), or the user switches to
+  // another agent.
+
+  _playChatIntro() {
+    if (this._chatIntroAbort) return;
+    const ctrl = new AbortController();
+    this._chatIntroAbort = ctrl;
+
+    const figletEl = el('pre', { class: 'chat-intro-figlet figlet' });
+    const subEl    = el('div', { class: 'chat-intro-sub' }, 'ready for your first message');
+    const wrapEl   = el('div', { class: 'chat-intro' }, figletEl, subEl);
+    this._chatIntroEl = wrapEl;
+
+    // Replace whatever was in the stream (the "no agent selected" empty
+    // would only be there if no agent; in the new-conversation case the
+    // stream is already empty after the history load).
+    this.streamEl.replaceChildren(wrapEl);
+
+    (async () => {
+      try {
+        await playIntro(figletEl, { signal: ctrl.signal });
+      } catch { /* ignore */ }
+      // Animation finished naturally: leave the figlet + subtitle in
+      // place until a turn lands. The cancel path will tear it down.
+    })();
+  }
+
+  _cancelChatIntro() {
+    if (this._chatIntroAbort) {
+      try { this._chatIntroAbort.abort(); } catch { /* ignore */ }
+      this._chatIntroAbort = null;
+    }
+    if (this._chatIntroEl && this._chatIntroEl.parentNode) {
+      try { this._chatIntroEl.parentNode.removeChild(this._chatIntroEl); } catch { /* ignore */ }
+    }
+    this._chatIntroEl = null;
   }
 
   renderInfo(agent) {
@@ -1061,6 +1128,9 @@ export class ChatView {
   }
 
   startTurn(userText, opts) {
+    // A turn is about to land in the stream. Cancel the welcome animation
+    // if it's still running so the figlet doesn't overlap the new bubble.
+    this._cancelChatIntro();
     const ts = (opts && opts.ts) || Date.now();
     const userBubble = renderUserBubble(userText, ts);
     const root = el('div', { class: 'turn' }, userBubble);

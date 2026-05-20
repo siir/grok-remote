@@ -202,25 +202,35 @@ body::before {
   background: var(--panel);
 }
 
-/* ── intro ────────────────────────────────────────────── */
-.intro {
-  position: relative;
-  z-index: 2;
-  padding: 28px 22px 8px;
-  text-align: left;
-  max-width: 980px;
-  margin: 0 auto;
-  width: 100%;
-  transition: max-height 0.6s ease, opacity 0.4s ease, padding 0.4s ease, transform 0.4s ease;
-  max-height: 240px;
-  overflow: hidden;
+/* ── intro animation (chat-stream welcome moment) ───────── */
+/* Plays inside the chat-stream when a brand-new conversation is opened
+   (turns.length === 0). Cancels on first user message / first SSE chunk.
+   The base .figlet + .figlet--hole + .cell-* rules below are shared
+   with the chat-intro variant (the animation lib adds those classes). */
+.chat-intro {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  animation: chat-intro-fade 0.35s ease-out;
+  max-width: 100%;
 }
-.intro--collapsed {
-  max-height: 0;
-  opacity: 0;
-  padding: 0 22px;
-  transform: translateY(-8px);
-  pointer-events: none;
+.chat-intro-figlet {
+  margin: 0;
+  text-align: center;
+}
+.chat-intro-sub {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+@keyframes chat-intro-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .figlet {
@@ -255,13 +265,6 @@ body::before {
   color: #f1f6fb;
   text-shadow: 0 0 8px rgba(241, 246, 251, 0.6);
 }
-.subtitle {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  letter-spacing: 0.12em;
-}
-
 /* ── app shell ────────────────────────────────────────── */
 .app {
   position: relative;
@@ -2974,8 +2977,8 @@ body::before {
   }
   .topbar-right { gap: 8px; }
   /* (brand-name + brand-version already hidden at 720px) */
-  .intro { padding: 18px 14px 6px; }
   .figlet { font-size: 13px; }
+  .chat-intro { padding: 8px 10px; }
   .chat-stream { padding: 12px 12px; }
   .composer { padding: 8px 10px; }
   .settings { padding: 18px 14px 60px; }
