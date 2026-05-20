@@ -207,6 +207,7 @@ function mountDashboard() {
   // hook up settings button in topbar
   const settingsBtn = document.getElementById('open-settings');
   if (settingsBtn) {
+    settingsBtn.innerHTML = iconHtml('settings');
     settingsBtn.addEventListener('click', (ev) => {
       ev.preventDefault();
       navigate('#/settings');

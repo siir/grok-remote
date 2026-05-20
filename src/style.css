@@ -1888,15 +1888,36 @@ body::before {
   word-break: break-all;
 }
 
-/* settings */
+/* settings — page-level wrapper. Scrolls vertically inside the main pane
+   and expands its content area on wider displays. */
 .settings {
-  max-width: 700px;
+  max-width: min(1100px, 92%);
   width: 100%;
   margin: 0 auto;
   padding: 28px 24px 60px;
   display: flex;
   flex-direction: column;
   gap: 18px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+/* Two-column field layout when the viewport is wide enough; single
+   column below 900px. */
+@media (min-width: 900px) {
+  .settings {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 28px;
+    row-gap: 18px;
+    align-items: start;
+  }
+  .settings > h2,
+  .settings > .settings-title,
+  .settings > .settings-status,
+  .settings > .settings-actions {
+    grid-column: 1 / -1;
+  }
 }
 .settings-title {
   margin: 0;
@@ -1978,11 +1999,13 @@ body::before {
 }
 .bottombar a:hover { color: var(--teal); }
 
-/* ── scrollbar ───────────────────────────────────────── */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: var(--bg-soft); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #2a3340; }
+/* ── scrollbar (thin everywhere; no extra padding around) ── */
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; margin: 0; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; border: 1px solid transparent; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* ── responsive ──────────────────────────────────────── */
 /* (mobile dashboard layout overrides live with the .left-rail responsive
@@ -3846,37 +3869,57 @@ body::before {
   position: relative;
 }
 
-/* Topbar panel toggle buttons. Two: one top-left (conversations sidebar),
-   one top-right (tools panel). When their target is hidden, these are the
-   only way to bring it back. Always visible on desktop; the icon updates
-   to reflect current state (panel-left-open vs panel-left-close, etc.). */
+/* Topbar panel toggle buttons. Pinned to the extreme corners of the
+   topbar (top-left for the conversations sidebar, top-right for the
+   tools panel). Icon-only, no border, no background. */
 .topbar-panel-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   background: transparent;
-  border: 1px solid var(--border);
+  border: none;
   color: var(--muted);
-  border-radius: 6px;
-  padding: 4px 6px;
+  padding: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   line-height: 1;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  z-index: 3;
+  transition: color 0.15s, transform 0.1s;
 }
+.topbar-panel-btn--left  { left: 8px; }
+.topbar-panel-btn--right { right: 8px; }
+
+/* Topbar icon-only buttons (settings gear, future siblings). Borderless,
+   icon swaps in via JS at boot. */
+.topbar-icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.15s, transform 0.1s;
+}
+.topbar-icon-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.topbar-icon-btn:hover { color: var(--teal); }
+.topbar-icon-btn:active { transform: scale(0.92); }
 .topbar-panel-btn svg {
   width: 18px;
   height: 18px;
 }
 .topbar-panel-btn:hover {
   color: var(--teal);
-  border-color: var(--teal);
-  background: rgba(94, 234, 212, 0.08);
 }
-.topbar-panel-btn--left {
-  margin-right: 4px;
-}
-.topbar-panel-btn--right {
-  margin-right: 4px;
+.topbar-panel-btn:active {
+  transform: translateY(-50%) scale(0.92);
 }
 @media (max-width: 720px) {
   .topbar-panel-btn { display: none !important; }
