@@ -75,6 +75,7 @@ async function pingHello() {
 const SYSTEM_AREAS = new Set([
   'mcp', 'memory', 'models', 'leaders', 'worktrees',
   'sessions', 'import', 'health', 'flow', 'setup', 'skills',
+  'subagents', 'hooks', 'plugins', 'marketplaces', 'lsp',
 ]);
 
 function parseRoute() {

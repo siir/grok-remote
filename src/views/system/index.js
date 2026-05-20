@@ -14,6 +14,11 @@ import * as importV   from './import.js';
 import * as flow      from './flow.js';
 import * as setup     from './setup.js';
 import * as skills    from './skills.js';
+import * as hooks        from './hooks.js';
+import * as nativeAgents from './agents.js';
+import * as plugins      from './plugins.js';
+import * as marketplaces from './marketplaces.js';
+import * as lsp          from './lsp.js';
 
 // label is the short name shown in the nav (tooltip) + accessibility name.
 // iconName indexes into src/lib/icons.js (inline SVGs). mount(container, route)
@@ -27,9 +32,14 @@ export const SYSTEM_PAGES = [
   { area: 'sessions',  label: 'sessions',     iconName: 'sessions',  module: sessions  },
   { area: 'import',    label: 'import',       iconName: 'import',    module: importV   },
   { area: 'health',    label: 'health',       iconName: 'health',    module: health    },
-  { area: 'flow',      label: 'live flow',    iconName: 'flow',      module: flow      },
-  { area: 'skills',    label: 'skills',       iconName: 'skills',    module: skills    },
-  { area: 'setup',     label: 'setup',        iconName: 'setup',     module: setup     },
+  { area: 'flow',         label: 'live flow',     iconName: 'flow',     module: flow         },
+  { area: 'skills',       label: 'skills',        iconName: 'skills',   module: skills       },
+  { area: 'subagents',    label: 'subagents',     iconName: 'leaders',  module: nativeAgents },
+  { area: 'hooks',        label: 'hooks',         iconName: 'flow',     module: hooks        },
+  { area: 'plugins',      label: 'plugins',       iconName: 'mcp',      module: plugins      },
+  { area: 'marketplaces', label: 'marketplaces',  iconName: 'import',   module: marketplaces },
+  { area: 'lsp',          label: 'lsp servers',   iconName: 'models',   module: lsp          },
+  { area: 'setup',        label: 'setup',         iconName: 'setup',    module: setup        },
 ];
 
 export function getSystemPage(area) {

@@ -159,6 +159,19 @@ export const api = {
     get:      ()      => request('GET',  '/api/system/models'),
   },
 
+  // Subagents (worker profiles) live as .md files under
+  // ~/.grok/agents/ or <cwd>/.grok/agents/. The list comes from `grok
+  // inspect` via /api/system/health; this section covers read/write of
+  // the individual files. Built-in subagents are not editable.
+  systemAgents: {
+    read:         (p)                       => request('GET',  `/api/system/agents/read?path=${encodeURIComponent(p || '')}`),
+    saveContent:  (p, content)              => request('PUT',  '/api/system/agents/content', { path: p, content }),
+    createFile:   (scope, name, content)    => request('POST', '/api/system/agents/file',
+      { scope, name, ...(typeof content === 'string' ? { content } : {}) }),
+    deleteFile:   (p)                       => request('DELETE',
+      `/api/system/agents/file?path=${encodeURIComponent(p || '')}`),
+  },
+
   systemHealth: {
     get:      ()      => request('GET',  '/api/system/health'),
     recheck:  ()      => request('POST', '/api/system/health/recheck'),
