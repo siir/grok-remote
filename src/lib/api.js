@@ -39,6 +39,8 @@ export const api = {
   updateAgent:  (id, patch)   => request('PATCH',  `/api/agents/${encodeURIComponent(id)}`, patch || {}),
   disconnect:   (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/disconnect`),
   connect:      (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/connect`),
+  share:        (id)          => request('POST',   `/api/agents/${encodeURIComponent(id)}/publish`),
+  runSetup:     ()            => request('POST',   '/api/system/setup'),
   prompt:       (id, textOrOpts) => {
     // Backwards compat: a plain string still works.
     const body = (textOrOpts && typeof textOrOpts === 'object')
@@ -80,7 +82,85 @@ export const api = {
   listFiles:    (id, path)    => request('GET',    `/api/agents/${encodeURIComponent(id)}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   readFile:     (id, path)    => request('GET',    `/api/agents/${encodeURIComponent(id)}/files?path=${encodeURIComponent(path)}`),
   fileRawUrl:   (id, p)       => `/api/agents/${encodeURIComponent(id)}/files/raw?path=${encodeURIComponent(p || '')}`,
+  trace:        (id)          => request('GET',    `/api/agents/${encodeURIComponent(id)}/trace`),
 
   getSettings:  ()            => request('GET',    '/api/settings'),
   patchSettings:(body)        => request('PATCH',  '/api/settings', body),
+
+  mcp: {
+    list:     ()      => request('GET',    '/api/system/mcp'),
+    add:      (body)  => request('POST',   '/api/system/mcp', body || {}),
+    remove:   (name)  => request('DELETE', `/api/system/mcp/${encodeURIComponent(name)}`),
+    doctor:   (name)  => request('GET',    name
+                                              ? `/api/system/mcp/${encodeURIComponent(name)}/doctor`
+                                              : '/api/system/mcp/doctor'),
+  },
+
+  memory: {
+    get:      ()      => request('GET',  '/api/system/memory'),
+    clear:    (scope) => request('POST', '/api/system/memory/clear', { scope }),
+  },
+
+  skills: {
+    list:     ()      => request('GET', '/api/system/skills'),
+    read:     (path)  => request('GET', `/api/system/skills/read?path=${encodeURIComponent(path)}`),
+  },
+
+  systemModels: {
+    get:      ()      => request('GET',  '/api/system/models'),
+  },
+
+  systemHealth: {
+    get:      ()      => request('GET',  '/api/system/health'),
+    recheck:  ()      => request('POST', '/api/system/health/recheck'),
+  },
+
+  leaders: {
+    list:          ()           => request('GET',  '/api/system/leaders'),
+    info:          (pid)        => request('GET',  `/api/system/leaders/${encodeURIComponent(pid)}`),
+    killAll:       ()           => request('POST', '/api/system/leaders/kill', {}),
+    profileStatus: (pid)        => request('GET',  `/api/system/leaders/${encodeURIComponent(pid)}/profile/status`),
+    profileStart:  (pid, body)  => request('POST', `/api/system/leaders/${encodeURIComponent(pid)}/profile/start`, body || {}),
+    profileStop:   (pid, body)  => request('POST', `/api/system/leaders/${encodeURIComponent(pid)}/profile/stop`, body || {}),
+  },
+
+  worktrees: {
+    list: (opts) => {
+      const qs = new URLSearchParams();
+      if (opts && opts.all)  qs.set('all',  '1');
+      if (opts && opts.repo) qs.set('repo', String(opts.repo));
+      if (opts && opts.type) qs.set('type', String(opts.type));
+      const tail = qs.toString();
+      return request('GET', `/api/system/worktrees${tail ? `?${tail}` : ''}`);
+    },
+    show: (id) => request('GET', `/api/system/worktrees/${encodeURIComponent(id)}`),
+    rm: (id, opts) => {
+      const qs = new URLSearchParams();
+      if (opts && opts.force)  qs.set('force',  '1');
+      if (opts && opts.dryRun) qs.set('dryRun', '1');
+      const tail = qs.toString();
+      return request('DELETE', `/api/system/worktrees/${encodeURIComponent(id)}${tail ? `?${tail}` : ''}`);
+    },
+    gc:        (body) => request('POST', '/api/system/worktrees/gc', body || {}),
+    dbStats:   ()     => request('GET',  '/api/system/worktrees/db/stats'),
+    dbPath:    ()     => request('GET',  '/api/system/worktrees/db/path'),
+    dbRebuild: ()     => request('POST', '/api/system/worktrees/db/rebuild', {}),
+  },
+
+  sessions: {
+    list: (opts) => {
+      const { q, limit } = opts || {};
+      const qs = new URLSearchParams();
+      if (q && String(q).trim()) qs.set('q', String(q).trim());
+      if (typeof limit === 'number' && limit > 0) qs.set('limit', String(limit));
+      const tail = qs.toString();
+      return request('GET', `/api/system/sessions${tail ? `?${tail}` : ''}`);
+    },
+  },
+
+  // Named "importer" to avoid the reserved word `import` in callers.
+  importer: {
+    list: ()        => request('GET',  '/api/system/import'),
+    run:  (targets) => request('POST', '/api/system/import', { targets: Array.isArray(targets) ? targets : [] }),
+  },
 };

@@ -14,6 +14,7 @@
 import { api } from '../lib/api.js';
 import { openStream } from '../lib/sse.js';
 import { mountFilesTab, unmountFilesTab } from './files.js';
+import { mountTraceTab, unmountTraceTab } from './trace.js';
 import attachSlashPalette from '../lib/slash-palette.js';
 import { setupImageAttach } from '../lib/attach-images.js';
 import {
@@ -46,8 +47,16 @@ export class ChatView {
     this.filesPane = el('div', { class: 'pane pane--files hidden' });
     this.filesMounted = false;
     this.infoPane  = el('div', { class: 'pane pane--info hidden' }, el('div', { class: 'pane-empty' }, 'no agent selected'));
+    this.tracePane = el('div', { class: 'pane pane--trace hidden' });
+    this.traceMounted = false;
 
     this.toastHost = el('div', { class: 'toast-host' });
+
+    // Settings drawer: slides in from the right of the chat. Built lazily
+    // when the user clicks the gear icon so the DOM cost is zero otherwise.
+    this.settingsDrawer = null;
+    this.settingsDrawerOpen = false;
+    this._modelSuggestions = null;
 
     this.empty = el('div', { class: 'chat-empty' },
       el('div', { class: 'chat-empty-headline' }, 'no agent selected'),
@@ -64,6 +73,7 @@ export class ChatView {
         ),
         this.filesPane,
         this.infoPane,
+        this.tracePane,
         this.toastHost,
       ),
     );
@@ -113,6 +123,10 @@ export class ChatView {
       unmountFilesTab();
       this.filesMounted = false;
     }
+    if (this.traceMounted) {
+      unmountTraceTab();
+      this.traceMounted = false;
+    }
     if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
@@ -136,6 +150,7 @@ export class ChatView {
       conversation: make('conversation', 'Conversation'),
       files:        make('files',        'Files'),
       info:         make('info',         'Info'),
+      trace:        make('trace',        'Trace'),
     };
     this.starBtn = el('button', {
       class: 'chat-star',
@@ -144,6 +159,13 @@ export class ChatView {
       'aria-label': 'star conversation',
       onclick: () => this.toggleStar(),
     }, '☆');
+    this.settingsBtn = el('button', {
+      class: 'chat-settings',
+      type: 'button',
+      title: 'Per-conversation grok settings (model, reasoning effort, rules, ...)',
+      'aria-label': 'open settings drawer',
+      onclick: () => this.toggleSettingsDrawer(),
+    }, '⚙');
     this.connectBtn = el('button', {
       class: 'tab-action tab-action--toggle',
       type: 'button',
@@ -160,8 +182,10 @@ export class ChatView {
       this.tabBtns.conversation,
       this.tabBtns.files,
       this.tabBtns.info,
+      this.tabBtns.trace,
       el('span', { class: 'tabs-spacer' }),
       this.starBtn,
+      this.settingsBtn,
       this.connectBtn,
       this.copyConvoBtn,
     );
@@ -221,6 +245,8 @@ export class ChatView {
     this._syncStarBtn();
     // Re-render info tab if visible so status/sessionId etc. stay current.
     if (this.tabsState === 'info') this.renderInfo(a);
+    // Keep the drawer's "reconnect to apply" notice in sync with status.
+    if (this.settingsDrawerOpen) this._updateSettingsNotice(a);
   }
 
   _syncConnectBtn() {
@@ -269,6 +295,7 @@ export class ChatView {
     if (convo) convo.classList.toggle('hidden', key !== 'conversation');
     this.filesPane.classList.toggle('hidden', key !== 'files');
     this.infoPane.classList.toggle('hidden', key !== 'info');
+    this.tracePane.classList.toggle('hidden', key !== 'trace');
 
     if (key === 'files') {
       if (this.agentId) {
@@ -280,6 +307,20 @@ export class ChatView {
     } else if (this.filesMounted) {
       unmountFilesTab();
       this.filesMounted = false;
+    }
+
+    // Trace tab: always re-fetch and re-render on every open. The mount
+    // function unmounts any prior trace state first, so this is safe.
+    if (key === 'trace') {
+      if (this.agentId) {
+        mountTraceTab(this.tracePane, this.currentAgent || { id: this.agentId });
+        this.traceMounted = true;
+      } else {
+        this.tracePane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+      }
+    } else if (this.traceMounted) {
+      unmountTraceTab();
+      this.traceMounted = false;
     }
 
     if (key === 'info') {
@@ -454,6 +495,11 @@ export class ChatView {
       unmountFilesTab();
       this.filesMounted = false;
     }
+    if (this.traceMounted) {
+      unmountTraceTab();
+      this.traceMounted = false;
+      this.tracePane.replaceChildren();
+    }
 
     if (!agent || !agent.id) {
       this.agentId = null;
@@ -462,12 +508,15 @@ export class ChatView {
       this.filesPane.replaceChildren();
       this._setComposerEnabled(false);
       // Hide the star + connect buttons until an agent is loaded.
-      if (this.starBtn)    this.starBtn.hidden = true;
-      if (this.connectBtn) this.connectBtn.hidden = true;
+      if (this.starBtn)     this.starBtn.hidden = true;
+      if (this.settingsBtn) this.settingsBtn.hidden = true;
+      if (this.connectBtn)  this.connectBtn.hidden = true;
+      this.closeSettingsDrawer();
       return;
     }
-    if (this.starBtn)    this.starBtn.hidden = false;
-    if (this.connectBtn) this.connectBtn.hidden = false;
+    if (this.starBtn)     this.starBtn.hidden = false;
+    if (this.settingsBtn) this.settingsBtn.hidden = false;
+    if (this.connectBtn)  this.connectBtn.hidden = false;
 
     this.agentId = agent.id;
     this.currentAgent = agent;
@@ -580,7 +629,82 @@ export class ChatView {
         : null,
     );
 
-    this.infoPane.replaceChildren(grid, resume);
+    const publishSection = this._buildPublishSection(sessionId);
+
+    this.infoPane.replaceChildren(grid, resume, publishSection);
+  }
+
+  // Wraps `grok share <sessionId>` via POST /api/agents/:id/publish. The
+  // button is disabled until the agent has a sessionId, mirroring the
+  // resume block above. Result + warning text are rendered in-place.
+  _buildPublishSection(sessionId) {
+    const wrap = el('div', { class: 'info-publish' });
+    const head = el('div', { class: 'info-publish-head' },
+      el('span', { class: 'info-publish-title' }, 'Publish (share)'),
+    );
+    const warn = el('div', { class: 'info-publish-warn' },
+      'This uploads the entire session (prompts, tool calls, assistant messages) to xAI.',
+      ' Do not share if it contains secrets, credentials, or private code.',
+    );
+
+    const resultHost = el('div', { class: 'info-publish-result' });
+    const publishBtn = el('button', {
+      class: 'btn btn--ghost info-publish-btn',
+      type: 'button',
+      onclick: () => this._handlePublish(publishBtn, resultHost),
+    }, 'publish session');
+    if (!sessionId) {
+      publishBtn.disabled = true;
+      publishBtn.title = 'Session ID not yet assigned.';
+    }
+    head.appendChild(publishBtn);
+
+    wrap.appendChild(head);
+    wrap.appendChild(warn);
+    if (!sessionId) {
+      wrap.appendChild(el('div', { class: 'info-publish-hint' },
+        'Available once the agent finishes its handshake and has a session id.'));
+    }
+    wrap.appendChild(resultHost);
+    return wrap;
+  }
+
+  async _handlePublish(btn, resultHost) {
+    if (!this.agentId || !btn) return;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'publishing...';
+    resultHost.replaceChildren();
+    try {
+      const data = await api.share(this.agentId);
+      const url = data && data.url;
+      if (!url) throw new Error('server did not return a URL');
+      const copyBtn = el('button', {
+        class: 'info-copy',
+        type: 'button',
+        title: 'Copy share URL',
+        onclick: async () => {
+          const ok = await copyToClipboard(url);
+          if (ok) {
+            this.flashBtnLabel(copyBtn, 'copied');
+            this.showToast('share URL copied.', 'info');
+          }
+        },
+      }, 'copy');
+      const link = el('a', {
+        class: 'info-publish-url',
+        href: url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+      }, url);
+      resultHost.appendChild(el('div', { class: 'info-publish-result-row' }, link, copyBtn));
+    } catch (e) {
+      resultHost.appendChild(el('div', { class: 'info-publish-error' },
+        `publish failed: ${e && e.message ? e.message : String(e)}`));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
   }
 
   async refreshHistory({ all = false, turns = 50 } = {}) {
@@ -1034,6 +1158,330 @@ export class ChatView {
       this.showToast('cancel requested', 'warn');
     } catch (e) {
       this.showToast(`cancel failed: ${e.message}`, 'warn');
+    }
+  }
+
+  // ── settings drawer ─────────────────────────────────────────────────
+
+  toggleSettingsDrawer() {
+    if (this.settingsDrawerOpen) this.closeSettingsDrawer();
+    else this.openSettingsDrawer();
+  }
+
+  openSettingsDrawer() {
+    if (!this.agentId) return;
+    if (!this.settingsDrawer) this._buildSettingsDrawer();
+    this._populateSettingsDrawer(this.currentAgent || {});
+    this.settingsDrawer.classList.add('chat-settings-drawer--open');
+    this.settingsDrawerOpen = true;
+    // Fetch model suggestions lazily on first open. Best-effort.
+    if (this._modelSuggestions == null) {
+      this._modelSuggestions = [];
+      api.systemModels.get()
+        .then((r) => {
+          const items = (r && Array.isArray(r.items)) ? r.items : [];
+          this._modelSuggestions = items.map(i => i.id).filter(Boolean);
+          this._renderModelDatalist();
+        })
+        .catch(() => { /* leave list empty */ });
+    } else {
+      this._renderModelDatalist();
+    }
+  }
+
+  closeSettingsDrawer() {
+    if (!this.settingsDrawer) return;
+    this.settingsDrawer.classList.remove('chat-settings-drawer--open');
+    this.settingsDrawerOpen = false;
+  }
+
+  _buildSettingsDrawer() {
+    // Each row is built as a small helper so we can wire .value into a map
+    // for save-time collection without manually plumbing each one.
+    const fields = {};
+
+    const labeledRow = (key, labelText, input, hintText) => {
+      fields[key] = input;
+      const row = el('div', { class: 'sd-row' },
+        el('label', { class: 'sd-label' }, labelText),
+        input,
+        hintText ? el('div', { class: 'sd-hint' }, hintText) : null,
+      );
+      return row;
+    };
+
+    const modelInput = el('input', {
+      class: 'sd-input',
+      type: 'text',
+      list: 'chat-settings-model-list',
+      placeholder: 'e.g. grok-code-fast-1 (leave blank for default)',
+    });
+    const reasoningSelect = el('select', { class: 'sd-input' },
+      el('option', { value: '' }, 'default'),
+      el('option', { value: 'none' }, 'none'),
+      el('option', { value: 'minimal' }, 'minimal'),
+      el('option', { value: 'low' }, 'low'),
+      el('option', { value: 'medium' }, 'medium'),
+      el('option', { value: 'high' }, 'high'),
+      el('option', { value: 'xhigh' }, 'xhigh'),
+    );
+    const systemPromptTa = el('textarea', {
+      class: 'sd-input sd-textarea',
+      rows: '4',
+      placeholder: 'replace the agent system prompt entirely (leave blank to keep default).',
+    });
+    const rulesTa = el('textarea', {
+      class: 'sd-input sd-textarea',
+      rows: '4',
+      placeholder: 'extra rules appended to the system prompt (one per line is fine).',
+    });
+    const toolsInput = el('input', {
+      class: 'sd-input',
+      type: 'text',
+      placeholder: 'comma-separated, e.g. read_file,grep,list_dir',
+    });
+    const disallowedInput = el('input', {
+      class: 'sd-input',
+      type: 'text',
+      placeholder: 'comma-separated, e.g. web_search,run_terminal_cmd',
+    });
+    const allowTa = el('textarea', {
+      class: 'sd-input sd-textarea',
+      rows: '3',
+      placeholder: 'one rule per line, e.g. Bash(npm*)',
+    });
+    const denyTa = el('textarea', {
+      class: 'sd-input sd-textarea',
+      rows: '3',
+      placeholder: 'one rule per line, e.g. Bash(rm*)  (deny wins over allow)',
+    });
+
+    const worktreeCheckbox = el('input', {
+      class: 'sd-checkbox',
+      type: 'checkbox',
+    });
+    const worktreeName = el('input', {
+      class: 'sd-input sd-input--inline',
+      type: 'text',
+      placeholder: 'optional name',
+    });
+    const worktreeRow = el('div', { class: 'sd-row' },
+      el('label', { class: 'sd-label' },
+        worktreeCheckbox,
+        el('span', null, ' Run inside a new git worktree'),
+      ),
+      worktreeName,
+      el('div', { class: 'sd-hint' },
+        'Equivalent to `-w` (or `-w <name>` when filled).'),
+    );
+    fields.worktree = worktreeCheckbox;
+    fields.worktreeName = worktreeName;
+
+    const sandboxInput = el('input', {
+      class: 'sd-input',
+      type: 'text',
+      placeholder: 'sandbox profile name',
+    });
+
+    const alwaysApproveCheckbox = el('input', {
+      class: 'sd-checkbox',
+      type: 'checkbox',
+    });
+    alwaysApproveCheckbox.checked = true;
+    const alwaysApproveRow = el('div', { class: 'sd-row' },
+      el('label', { class: 'sd-label' },
+        alwaysApproveCheckbox,
+        el('span', null, ' Always approve tool calls (YOLO)'),
+      ),
+      el('div', { class: 'sd-hint' },
+        'On by default. Disabling it makes the agent prompt for permission before every tool call.'),
+    );
+    fields.alwaysApprove = alwaysApproveCheckbox;
+
+    const dataList = el('datalist', { id: 'chat-settings-model-list' });
+    this._modelDatalist = dataList;
+
+    const saveBtn = el('button', {
+      class: 'btn btn--primary sd-save',
+      type: 'button',
+      onclick: () => this._submitSettingsDrawer(),
+    }, 'save');
+    const resetBtn = el('button', {
+      class: 'btn btn--ghost sd-reset',
+      type: 'button',
+      title: 'Clear all per-conversation settings (revert to defaults)',
+      onclick: () => this._clearSettingsDrawer(),
+    }, 'clear all');
+    const closeBtn = el('button', {
+      class: 'btn btn--ghost sd-close',
+      type: 'button',
+      onclick: () => this.closeSettingsDrawer(),
+    }, 'close');
+
+    const notice = el('div', { class: 'sd-notice hidden' });
+    this._sdNotice = notice;
+
+    const body = el('div', { class: 'sd-body' },
+      labeledRow('model', 'Model', modelInput, 'Top-level `-m` override. Blank = whatever the CLI defaults to.'),
+      labeledRow('reasoningEffort', 'Reasoning effort', reasoningSelect, 'Maps to `--reasoning-effort`.'),
+      labeledRow('systemPromptOverride', 'System prompt override', systemPromptTa, 'Maps to `--system-prompt-override`. Replaces the entire system prompt.'),
+      labeledRow('rules', 'Rules', rulesTa, 'Maps to `--rules`. Appended after the system prompt.'),
+      labeledRow('tools', 'Allowed tools', toolsInput, 'Maps to `--tools`. Comma-separated; turns off default tool injection.'),
+      labeledRow('disallowedTools', 'Disallowed tools', disallowedInput, 'Maps to `--disallowed-tools`. Comma-separated.'),
+      labeledRow('allow', 'Permission allow rules', allowTa, 'Maps to repeated `--allow`. One rule per line.'),
+      labeledRow('deny', 'Permission deny rules', denyTa, 'Maps to repeated `--deny`. One rule per line. Deny wins over allow.'),
+      worktreeRow,
+      labeledRow('sandbox', 'Sandbox profile', sandboxInput, 'Maps to `--sandbox`.'),
+      alwaysApproveRow,
+      dataList,
+    );
+
+    const head = el('header', { class: 'sd-head' },
+      el('h3', { class: 'sd-title' }, 'Conversation settings'),
+      el('div', { class: 'sd-sub' },
+        'Per-conversation overrides for ', el('code', null, 'grok'),
+        ' top-level flags. Applied on the next time this agent (re)connects.'),
+      notice,
+    );
+
+    const foot = el('footer', { class: 'sd-foot' },
+      resetBtn,
+      el('span', { class: 'sd-foot-spacer' }),
+      closeBtn,
+      saveBtn,
+    );
+
+    const card = el('aside', { class: 'chat-settings-drawer-card' }, head, body, foot);
+    const backdrop = el('div', {
+      class: 'chat-settings-drawer-backdrop',
+      onclick: () => this.closeSettingsDrawer(),
+    });
+    const drawer = el('div', { class: 'chat-settings-drawer' }, backdrop, card);
+
+    this._sdFields = fields;
+    this.settingsDrawer = drawer;
+    this.root.appendChild(drawer);
+  }
+
+  _renderModelDatalist() {
+    if (!this._modelDatalist) return;
+    this._modelDatalist.replaceChildren();
+    for (const m of (this._modelSuggestions || [])) {
+      this._modelDatalist.appendChild(el('option', { value: m }));
+    }
+  }
+
+  _populateSettingsDrawer(agent) {
+    if (!this._sdFields) return;
+    const s = (agent && agent.settings) || {};
+    const f = this._sdFields;
+    f.model.value                = typeof s.model === 'string' ? s.model : '';
+    f.reasoningEffort.value      = typeof s.reasoningEffort === 'string' ? s.reasoningEffort : '';
+    f.systemPromptOverride.value = typeof s.systemPromptOverride === 'string' ? s.systemPromptOverride : '';
+    f.rules.value                = typeof s.rules === 'string' ? s.rules : '';
+    f.tools.value                = typeof s.tools === 'string' ? s.tools : '';
+    f.disallowedTools.value      = typeof s.disallowedTools === 'string' ? s.disallowedTools : '';
+    f.allow.value                = Array.isArray(s.allow) ? s.allow.join('\n') : '';
+    f.deny.value                 = Array.isArray(s.deny)  ? s.deny.join('\n')  : '';
+    f.sandbox.value              = typeof s.sandbox === 'string' ? s.sandbox : '';
+    if (typeof s.worktree === 'string' && s.worktree.length) {
+      f.worktree.checked = true;
+      f.worktreeName.value = s.worktree;
+    } else if (s.worktree === true) {
+      f.worktree.checked = true;
+      f.worktreeName.value = '';
+    } else {
+      f.worktree.checked = false;
+      f.worktreeName.value = '';
+    }
+    // alwaysApprove defaults to true if not set.
+    f.alwaysApprove.checked = !(s.alwaysApprove === false);
+
+    // Live-connected agents need a reconnect before the new settings take
+    // effect. Show a small banner explaining that. Mirrors the agent state
+    // we track via the sidebar refresh event.
+    this._updateSettingsNotice(agent);
+  }
+
+  _updateSettingsNotice(agent) {
+    if (!this._sdNotice) return;
+    const a = agent || this.currentAgent || {};
+    const live = !!a.connected && a.status !== 'disconnected' && a.status !== 'exited';
+    this._sdNotice.classList.toggle('hidden', !live);
+    if (live) {
+      this._sdNotice.textContent =
+        'Agent is currently connected. Saved changes will apply the NEXT time it (re)connects.';
+    } else {
+      this._sdNotice.textContent = '';
+    }
+  }
+
+  _collectSettings() {
+    const f = this._sdFields;
+    const linesToArr = (s) => String(s || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+    const out = {
+      model:                f.model.value.trim(),
+      reasoningEffort:      f.reasoningEffort.value.trim(),
+      systemPromptOverride: f.systemPromptOverride.value,
+      rules:                f.rules.value,
+      tools:                f.tools.value.trim(),
+      disallowedTools:      f.disallowedTools.value.trim(),
+      allow:                linesToArr(f.allow.value),
+      deny:                 linesToArr(f.deny.value),
+      sandbox:              f.sandbox.value.trim(),
+      alwaysApprove:        !!f.alwaysApprove.checked,
+    };
+    if (f.worktree.checked) {
+      const wn = f.worktreeName.value.trim();
+      out.worktree = wn ? wn : true;
+    } else {
+      out.worktree = null;
+    }
+    // Drop empty values so the saved payload stays minimal.
+    for (const k of Object.keys(out)) {
+      const v = out[k];
+      if (v == null) { delete out[k]; continue; }
+      if (typeof v === 'string' && v.length === 0) { delete out[k]; continue; }
+      if (Array.isArray(v) && v.length === 0) { delete out[k]; continue; }
+    }
+    return out;
+  }
+
+  async _submitSettingsDrawer() {
+    if (!this.agentId || !this._sdFields) return;
+    const settings = this._collectSettings();
+    const saveBtn = this.settingsDrawer && this.settingsDrawer.querySelector('.sd-save');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'saving...';
+    }
+    try {
+      const updated = await api.updateAgent(this.agentId, { settings });
+      this.applyAgentRefresh(updated);
+      this.showToast('conversation settings saved.', 'info');
+      this.closeSettingsDrawer();
+    } catch (e) {
+      this.showToast(`save failed: ${e && e.message ? e.message : String(e)}`, 'warn');
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'save';
+      }
+    }
+  }
+
+  async _clearSettingsDrawer() {
+    if (!this.agentId) return;
+    try {
+      const updated = await api.updateAgent(this.agentId, { settings: null });
+      this.applyAgentRefresh(updated);
+      this._populateSettingsDrawer(updated || {});
+      this.showToast('per-conversation settings cleared.', 'info');
+    } catch (e) {
+      this.showToast(`clear failed: ${e && e.message ? e.message : String(e)}`, 'warn');
     }
   }
 }

@@ -15,6 +15,8 @@ import { SettingsView } from './views/settings.js';
 import { el } from './lib/render.js';
 import { registerPwa } from './lib/pwa.js';
 import { applyTheme, getTheme, nextTheme, getThemeMeta } from './lib/themes.js';
+import { SYSTEM_PAGES, getSystemPage } from './views/system/index.js';
+import { iconHtml } from './lib/icons.js';
 
 // Apply persisted theme as early as possible (before any DOM is drawn) so the
 // dashboard never flashes the default palette.
@@ -187,12 +189,20 @@ async function pingHello() {
 
 // ── router ─────────────────────────────────────────────────────────────
 
+// Top-level "areas" outside the conversation flow. Each key matches the
+// first hash segment and a system view module under src/views/system/.
+const SYSTEM_AREAS = new Set([
+  'mcp', 'memory', 'models', 'leaders', 'worktrees',
+  'sessions', 'import', 'health', 'flow', 'setup', 'skills',
+]);
+
 function parseRoute() {
   const h = (location.hash || '#/').replace(/^#/, '');
   const parts = h.split('/').filter(Boolean);
   if (!parts.length) return { name: 'home' };
   if (parts[0] === 'agents' && parts[1]) return { name: 'chat', agentId: parts[1] };
   if (parts[0] === 'settings') return { name: 'settings' };
+  if (SYSTEM_AREAS.has(parts[0])) return { name: 'system', area: parts[0], parts };
   return { name: 'home' };
 }
 
@@ -227,12 +237,55 @@ function toggleDrawer() {
 
 // ── dashboard mount ────────────────────────────────────────────────────
 
+function makeRailIcon({ href, title, area, iconName }) {
+  // Build the icon element via innerHTML since iconHtml() returns a full
+  // <svg> string. el() doesn't accept raw HTML by default, so we wrap it
+  // in a span and assign innerHTML once.
+  const a = el('a', {
+    class: 'left-rail-item',
+    href,
+    title,
+    'aria-label': title,
+    'data-area': area,
+  });
+  const icon = document.createElement('span');
+  icon.className = 'left-rail-icon';
+  icon.innerHTML = iconHtml(iconName);
+  a.appendChild(icon);
+  return a;
+}
+
+function buildLeftRail() {
+  const rail = el('nav', { class: 'left-rail', 'aria-label': 'top-level navigation' });
+  rail.appendChild(makeRailIcon({
+    href: '#/', title: 'conversations', area: 'home', iconName: 'home',
+  }));
+  for (const p of SYSTEM_PAGES) {
+    rail.appendChild(makeRailIcon({
+      href: `#/${p.area}`, title: p.label, area: p.area, iconName: p.iconName,
+    }));
+  }
+  return rail;
+}
+
+function updateRailHighlight(route) {
+  const rail = document.querySelector('.left-rail');
+  if (!rail) return;
+  let activeArea = 'home';
+  if (route.name === 'chat') activeArea = 'home';
+  else if (route.name === 'system') activeArea = route.area;
+  for (const item of rail.querySelectorAll('.left-rail-item')) {
+    item.classList.toggle('left-rail-item--active', item.dataset.area === activeArea);
+  }
+}
+
 function mountDashboard() {
   const host = document.getElementById('app');
   if (!host) return;
   host.replaceChildren();
 
   let currentAgent = null;
+  let activeSystemPage = null; // { area, module }
   const chat     = new ChatView();
   const settings = new SettingsView();
   const sidebar  = new AgentsSidebar({
@@ -247,8 +300,10 @@ function mountDashboard() {
   });
 
   const mainHost = el('div', { class: 'main-pane' });
-  const shell = el('div', { class: 'dashboard' });
+  const railHost = buildLeftRail();
+  const shell = el('div', { class: 'dashboard dashboard--with-rail' });
   host.appendChild(shell);
+  shell.appendChild(railHost);
   sidebar.mount(shell);          // appends sidebar.root + starts polling
   shell.appendChild(mainHost);
 
@@ -279,9 +334,31 @@ function mountDashboard() {
     }
   });
 
+  function unmountActiveSystemPage() {
+    if (!activeSystemPage) return;
+    try { activeSystemPage.module.unmount?.(); } catch { /* ignore */ }
+    activeSystemPage = null;
+  }
+
   function renderRoute() {
     const route = parseRoute();
+    // Unmount the previous system page FIRST so its teardown (e.g.
+    // ReactFlow's root.unmount) runs against the DOM it still owns. Wiping
+    // mainHost first triggers React's "node to be removed is not a child"
+    // NotFoundError because the nodes are already gone by the time React
+    // tries to reconcile.
+    unmountActiveSystemPage();
     mainHost.replaceChildren();
+    updateRailHighlight(route);
+    if (route.name === 'system') {
+      const page = getSystemPage(route.area);
+      if (page && page.module && typeof page.module.mount === 'function') {
+        page.module.mount(mainHost, route);
+        activeSystemPage = page;
+        return;
+      }
+      // Unknown system area: fall through to home.
+    }
     if (route.name === 'settings') {
       settings.mount(mainHost);
       return;

@@ -15,6 +15,7 @@
     "pm2:logs": "pm2 logs grok-remote"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
     "vite": "^5.4.10"
   },
   "engines": {
@@ -24,5 +25,10 @@
   "author": "Daniel Farina <https://x.com/daniel_farinax>",
   "bin": {
     "grok-remote": "./server.js"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.10.2",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
   }
 }

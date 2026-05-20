@@ -16,6 +16,9 @@ import { AgentManager } from './lib/agent-manager.js';
 import { load as loadSettings, save as saveSettings } from './lib/settings.js';
 import { readAll as readHistory } from './lib/history.js';
 import { writeHeaders as sseHeaders, writeEvent as sseWrite, writePing as ssePing } from './lib/sse.js';
+import { buildTrace } from './lib/trace-host.js';
+import { handleSystem } from './lib/routes/system.js';
+import { runGrokText, errorToResponse } from './lib/grok-cli.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -256,11 +259,58 @@ async function handleApi(req, res, url, method) {
     if (suffix === '/files' && method === 'GET') {
       return handleFilesList(req, res, rec);
     }
+    if (suffix === '/trace' && method === 'GET') {
+      try {
+        const data = await buildTrace(rec);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify(data));
+        return;
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message });
+      }
+    }
     if (suffix === '/files/raw' && (method === 'GET' || method === 'HEAD')) {
       return handleFilesRaw(req, res, rec, method);
     }
     if (suffix === '/stream' && method === 'GET') {
       return handleStream(req, res, id);
+    }
+    if (suffix === '/publish' && method === 'POST') {
+      // Wraps `grok share <sessionId>`. The agent must have a sessionId,
+      // either live (currently connected) or persisted from a prior run.
+      const sessionId = rec.sessionId || rec.lastSessionId;
+      if (!sessionId) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'agent has no sessionId yet; complete at least one turn before publishing',
+        });
+      }
+      try {
+        // `grok share` uploads the session to xAI and prints the share URL on
+        // stdout. We give it a generous timeout because the upload size scales
+        // with conversation length.
+        const stdout = await runGrokText(['share', sessionId], {
+          timeoutMs: 60_000,
+          maxBytes: 256 * 1024,
+        });
+        // Pluck the first https:// URL out of stdout. We accept any host so
+        // future CLI versions that move to a different domain still work.
+        const m = stdout.match(/https?:\/\/\S+/);
+        const url = m ? m[0].replace(/[)\].,;]+$/, '') : null;
+        if (!url) {
+          return sendJson(res, 500, {
+            ok: false,
+            error: 'grok share did not print a URL',
+            stdout: stdout.slice(-2000),
+          });
+        }
+        return sendJson(res, 200, { ok: true, url, sessionId, stdout });
+      } catch (err) {
+        return sendJson(res, 500, errorToResponse(err));
+      }
     }
     return sendJson(res, 404, { ok: false, error: 'not found' });
   }
@@ -585,6 +635,14 @@ function handleStream(req, res, id) {
 
 const server = http.createServer(async (req, res) => {
   const url = (req.url || '').split('?')[0];
+  if (url.startsWith('/api/system/')) {
+    try {
+      await handleSystem(req, res, url);
+    } catch (err) {
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
   if (url.startsWith('/api/')) {
     try {
       await handleApi(req, res, url, req.method || 'GET');
