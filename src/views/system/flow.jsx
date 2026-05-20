@@ -79,6 +79,102 @@ function pickSubAgentLabel(u) {
     || 'sub-agent';
 }
 
+// Pluck the sub-agent's session id from a sub record. Two sources:
+//   1. SubagentCompleted rawOutput.subagent_id — set when the sub-agent
+//      completed inline and emitted its final payload.
+//   2. The spawn-ack content text "subagent_id: <uuid>" — used by
+//      run_in_background=true spawns (they don't get a SubagentCompleted).
+// The caller is expected to cache the result on the sub record so this
+// only runs once per sub.
+const SUBAGENT_ID_RE = /subagent_id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+function extractSubagentId(sub) {
+  if (!sub) return null;
+  const ro = sub.rawOutput;
+  if (ro && typeof ro === 'object' && typeof ro.subagent_id === 'string' && ro.subagent_id) {
+    return ro.subagent_id;
+  }
+  // bg=true spawn ack: text body lives in either rawOutput.text or the
+  // streamed response content blocks.
+  if (ro && typeof ro === 'object' && typeof ro.text === 'string') {
+    const m = ro.text.match(SUBAGENT_ID_RE);
+    if (m) return m[1];
+  }
+  if (Array.isArray(sub.response)) {
+    for (const block of sub.response) {
+      const t = block && typeof block.text === 'string' ? block.text : '';
+      const m = t.match(SUBAGENT_ID_RE);
+      if (m) return m[1];
+    }
+  }
+  return null;
+}
+
+// Walk a sub-agent's trace `updates.jsonl` rows and return a flat list of
+// child tool-call entries. Mirrors the live applyAgentEventToState reducer
+// but lives in a side channel so it doesn't pollute the parent agent's
+// state. We only care about tool_call / tool_call_update rows; everything
+// else (messages, thoughts, prompt boundaries) is irrelevant for the
+// child-tool-node column.
+function extractChildCallsFromTrace(traceData) {
+  if (!traceData || !Array.isArray(traceData.updates)) return [];
+  const byId = new Map(); // toolCallId -> child call record
+  for (const row of traceData.updates) {
+    if (!row || typeof row !== 'object') continue;
+    // updates.jsonl rows from `grok trace` are JSON-RPC envelopes:
+    //   { method: "session/update", params: { sessionId, update: {...}, _meta: {...} } }
+    // The ACP-style update object lives under params.update; the _meta
+    // (with agentTimestampMs + updateParams.status) lives under params._meta.
+    // Fall back to the older flat shape just in case.
+    const params = (row.params && typeof row.params === 'object') ? row.params : null;
+    const u = (params && params.update && typeof params.update === 'object')
+      ? params.update
+      : ((row.update && typeof row.update === 'object') ? row.update : row);
+    const meta = (params && params._meta) || row._meta || {};
+    const sessionUpdate = u.sessionUpdate || row.sessionUpdate;
+    if (sessionUpdate !== 'tool_call' && sessionUpdate !== 'tool_call_update') continue;
+    const id = u.toolCallId || u.id;
+    if (!id) continue;
+    // Skip sub-sub-agent spawns inside the child for now; deep nesting can
+    // come later. We don't render them as nodes anyway.
+    if (isSubAgentCall(u)) continue;
+    const at = Number.isFinite(meta.agentTimestampMs)
+      ? meta.agentTimestampMs
+      : (Number.isFinite(row.timestamp) ? row.timestamp * 1000 : Date.now());
+    const status = (meta.updateParams && meta.updateParams.status) || u.status || 'Pending';
+    const done = (status === 'Completed' || status === 'completed'
+                  || status === 'Failed' || status === 'failed'
+                  || status === 'canceled');
+    const prev = byId.get(id) || {
+      id,
+      kind: u.kind || '',
+      label: pickToolLabel(u),
+      status: 'Pending',
+      rawInput: null,
+      rawOutput: null,
+      content: [],
+      locations: [],
+      startedAt: at,
+      endedAt: null,
+    };
+    const nextContent = u.content
+      ? mergeToolContent(prev.content, extractToolContent(u.content))
+      : prev.content;
+    const merged = {
+      ...prev,
+      kind: u.kind || prev.kind,
+      label: pickToolLabel(u) || prev.label,
+      status,
+      rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
+      rawOutput: (u.rawOutput != null) ? u.rawOutput : prev.rawOutput,
+      content: nextContent,
+      locations: Array.isArray(u.locations) && u.locations.length ? u.locations.slice() : prev.locations,
+      endedAt: done ? (prev.endedAt || at) : prev.endedAt,
+    };
+    byId.set(id, merged);
+  }
+  return [...byId.values()].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+}
+
 // Sub-agent layout: cards hang off the LEFT side of the main agent, stacked
 // vertically using the same AGENT_GAP-style cadence so future deep nesting
 // is easy to extend.
@@ -86,6 +182,11 @@ const LAYOUT = {
   AGENT_GAP: 320,    // mirror AGENT_ROW_HEIGHT cadence between siblings
   SUB_AGENT_X: -260, // 240px wide card + 20px gap from parent's left edge
   SUB_AGENT_GAP: 12, // vertical gap between adjacent sub-agent cards
+  // Child tool-call nodes hang off the LEFT side of an expanded sub-agent
+  // card. They sit further left than the sub-agent column (offset relative
+  // to the sub-agent's own x).
+  SUB_AGENT_CHILD_X: -220, // delta from sub-agent x: -260 - 220 = -480
+  SUB_AGENT_CHILD_GAP: 8,
   TOOL_GAP: 12,      // vertical gap between adjacent tool / group cards in the same column
   BG_GAP: 12,        // vertical gap between adjacent bg-task cards
   AGENT_CLUSTER_GAP: 80, // gap between one agent cluster and the next
@@ -371,6 +472,9 @@ function SubAgentNode({ data }) {
     >
       <Handle type="target" position={Position.Right} className="flow-handle" />
       <Handle type="source" position={Position.Right} className="flow-handle" />
+      {/* Left handle: source for edges to child tool-call nodes that hang
+          off this sub-agent's left side when expanded. */}
+      <Handle type="source" id="children" position={Position.Left} className="flow-handle" />
       <div className="flow-subagent-node__crumb" title={`parent: ${data.parentName || ''}`}>
         parent: <span className="flow-subagent-node__crumb-name">{data.parentName || 'agent'}</span>
       </div>
@@ -388,6 +492,24 @@ function SubAgentNode({ data }) {
           {data.status || 'pending'}
         </span>
         {showDur && <span className="flow-subagent-node__dur">{showDur}</span>}
+        {data.childStatus === 'loading' && (
+          <span className="flow-subagent-node__childinfo" title="fetching child trace">
+            loading child events...
+          </span>
+        )}
+        {data.childStatus === 'loaded' && typeof data.childCount === 'number' && data.childCount > 0 && (
+          <span className="flow-subagent-node__childinfo" title="child tool calls fetched">
+            {data.childCount} child call{data.childCount === 1 ? '' : 's'}
+          </span>
+        )}
+        {data.childStatus === 'error' && (
+          <span
+            className="flow-subagent-node__childinfo flow-subagent-node__childinfo--err"
+            title={data.childError || 'failed to load child trace'}
+          >
+            child trace failed
+          </span>
+        )}
       </div>
       {snippet && (
         <div className="flow-subagent-node__snippet" title={responseText}>
@@ -867,6 +989,12 @@ function FlowInner({ filterIds = null }) {
   const [userPositions, setUserPositions] = useState({}); // nodeId -> {x, y}
   const [statsOpen, setStatsOpen]         = useState(hasFilter); // open by default in scoped view
   const [tick, setTick]                   = useState(0); // forces re-render of live durations
+  // Per-sub-agent child trace state. Keyed by `${agentId}:${subId}`. Value is
+  // { status: 'loading'|'loaded'|'error', calls: [...], error?: string,
+  //   fetchedAt: number, sessionId: string }. Lazy-populated on first
+  // sub-agent expand; cached until the user hits the per-card refresh
+  // button (not yet wired) or reloads the page.
+  const [subagentChildren, setSubagentChildren] = useState({});
   const { fitView } = useReactFlow();
 
   // Mutable refs that survive re-renders without re-subscribing effects.
@@ -878,6 +1006,10 @@ function FlowInner({ filterIds = null }) {
   // the "size change" signal without re-running on every other piece of
   // state. Updated in toggleNode.
   const expandFitTimerRef = useRef(null);
+  // Keys of sub-agent child fetches currently in flight. Prevents a second
+  // request from being kicked off while the first hasn't resolved (e.g.
+  // user rapidly toggling the same sub-agent open/closed/open).
+  const subChildInFlightRef = useRef(new Set());
 
   // Keep latest values reachable inside polling closures without retriggering.
   const showArchivedRef = useRef(showArchived);
@@ -1158,20 +1290,66 @@ function FlowInner({ filterIds = null }) {
     });
   }, [fitView]);
 
+  // Kick off a child-trace fetch for one sub-agent. Idempotent: skips if a
+  // request is already in flight or the entry is already loaded. Pure side
+  // effect (writes to subagentChildren + subChildInFlightRef).
+  const fetchSubChildren = useCallback((key, sessionId) => {
+    if (!sessionId) return;
+    if (subChildInFlightRef.current.has(key)) return;
+    setSubagentChildren((prev) => {
+      const existing = prev[key];
+      if (existing && (existing.status === 'loaded' || existing.status === 'loading')) {
+        return prev;
+      }
+      return { ...prev, [key]: { status: 'loading', calls: [], sessionId } };
+    });
+    subChildInFlightRef.current.add(key);
+    api.subagents.trace(sessionId).then((data) => {
+      const calls = extractChildCallsFromTrace(data);
+      setSubagentChildren((prev) => ({
+        ...prev,
+        [key]: { status: 'loaded', calls, sessionId, fetchedAt: Date.now() },
+      }));
+    }).catch((err) => {
+      setSubagentChildren((prev) => ({
+        ...prev,
+        [key]: {
+          status: 'error',
+          calls: [],
+          sessionId,
+          error: (err && err.message) || 'fetch failed',
+          fetchedAt: Date.now(),
+        },
+      }));
+    }).finally(() => {
+      subChildInFlightRef.current.delete(key);
+    });
+  }, []);
+
   // Lifted "open/closed" toggle for the rest of the expandable node types
   // (tool, sub-agent). The parent re-renders, the layout reflows around
   // the newly-tall body, and we fit-view so the user can see it.
-  const toggleNode = useCallback((nodeId) => {
+  //
+  // For sub-agent nodes, opening also kicks off a one-time fetch of the
+  // child agent's trace (its own session's tool calls live there).
+  const toggleNode = useCallback((nodeId, ctx) => {
+    let wasOpen = false;
     setExpandedNodes((prev) => {
       const next = new Set(prev);
-      if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
+      if (next.has(nodeId)) { next.delete(nodeId); wasOpen = true; }
+      else next.add(nodeId);
       return next;
     });
+    // ctx: { kind: 'subAgent', childKey, sessionId } -- if present and we
+    // just opened the node, lazy-load the child trace.
+    if (!wasOpen && ctx && ctx.kind === 'subAgent' && ctx.childKey && ctx.sessionId) {
+      fetchSubChildren(ctx.childKey, ctx.sessionId);
+    }
     if (expandFitTimerRef.current) cancelAnimationFrame(expandFitTimerRef.current);
     expandFitTimerRef.current = requestAnimationFrame(() => {
       try { fitView({ padding: 0.15, duration: 250 }); } catch { /* ignore */ }
     });
-  }, [fitView]);
+  }, [fitView, fetchSubChildren]);
 
   // User dragged a node. Remember the new x/y so the next auto-layout pass
   // leaves it where the user dropped it.
@@ -1251,6 +1429,13 @@ function FlowInner({ filterIds = null }) {
             const sy = subY;
             const status = String(sub.status || 'pending').toLowerCase();
             const running = !sub.endedAt && (status === 'pending' || status === 'running' || status === 'in_progress');
+            // Child-trace state lookup. We don't fetch here (that happens
+            // in toggleNode on open) -- this is only for the data we pass
+            // into the SubAgentNode for its loading badge + the children
+            // we render off to the left when expanded.
+            const childKey = `${agentNode.data.agentId}:${sub.id}`;
+            const childEntry = subagentChildren[childKey];
+            const childSessionId = extractSubagentId(sub);
             auxNodes.push({
               id: subId,
               type: 'subAgent',
@@ -1270,7 +1455,14 @@ function FlowInner({ filterIds = null }) {
                 parentName: agentNode.data.name,
                 depth: 1,
                 isOpen,
-                onToggle: () => toggleNode(subId),
+                childStatus: childEntry ? childEntry.status : (childSessionId ? 'idle' : null),
+                childCount: childEntry && Array.isArray(childEntry.calls) ? childEntry.calls.length : 0,
+                childError: childEntry && childEntry.error ? childEntry.error : null,
+                onToggle: () => toggleNode(subId, {
+                  kind: 'subAgent',
+                  childKey,
+                  sessionId: childSessionId,
+                }),
               },
             });
             auxEdges.push({
@@ -1288,7 +1480,68 @@ function FlowInner({ filterIds = null }) {
                 strokeDasharray: running ? '0' : '4 3',
               },
             });
+            // The sub-agent card's own height contribution.
             subY += nodeKind('subAgent', isOpen) + LAYOUT.SUB_AGENT_GAP;
+
+            // --- Child tool calls (rendered LEFT of the sub-agent card) ---
+            // Only when:
+            //   - the sub-agent is expanded
+            //   - we successfully fetched a non-empty trace
+            // We position child nodes vertically aligned with the
+            // sub-agent's top, in their own short column, then advance
+            // subY past whichever column is taller (the sub-agent itself
+            // or its child column).
+            if (isOpen && childEntry && childEntry.status === 'loaded' && childEntry.calls.length > 0) {
+              const childX = sx + LAYOUT.SUB_AGENT_CHILD_X;
+              let childY = sy;
+              childEntry.calls.forEach((call) => {
+                const childId = `subtool:${agentNode.data.agentId}:${sub.id}:${call.id}`;
+                const childOpen = expandedNodes.has(childId);
+                const inactive = !!call.endedAt;
+                auxNodes.push({
+                  id: childId,
+                  type: 'tool',
+                  position: { x: childX, y: childY },
+                  draggable: true,
+                  selectable: true,
+                  data: {
+                    id: call.id,
+                    kind: call.kind,
+                    label: call.label,
+                    status: call.status,
+                    rawInput: call.rawInput,
+                    rawOutput: call.rawOutput,
+                    content: call.content,
+                    locations: call.locations,
+                    startedAt: call.startedAt,
+                    endedAt: call.endedAt,
+                    isOpen: childOpen,
+                    onToggle: () => toggleNode(childId),
+                    depth: 2,
+                  },
+                  style: inactive ? { opacity: 0.85 } : { opacity: 1 },
+                  className: 'flow-tool-node-wrap flow-tool-node-wrap--subchild',
+                });
+                auxEdges.push({
+                  id: `edge:${subId}->${childId}`,
+                  source: subId,
+                  sourceHandle: 'children',
+                  target: childId,
+                  animated: !call.endedAt,
+                  style: {
+                    stroke: (String(call.status || '').toLowerCase() === 'failed' ? 'var(--red)' : 'var(--blue)'),
+                    strokeWidth: 1.1,
+                    opacity: call.endedAt ? 0.6 : 1,
+                  },
+                });
+                childY += nodeKind('tool', childOpen) + LAYOUT.SUB_AGENT_CHILD_GAP;
+              });
+              // Advance the parent subY cursor past the bottom of the
+              // child column if it ended below the sub-agent card itself.
+              if (childY > subY) {
+                subY = childY + LAYOUT.SUB_AGENT_GAP;
+              }
+            }
           });
         }
 
@@ -1516,7 +1769,7 @@ function FlowInner({ filterIds = null }) {
     }
 
     return { nodes: allNodes, edges: auxEdges };
-  }, [agents, agentState, hasFilter, showAll, filterIds, expandedGroups, expandedNodes, userPositions, toggleGroup, toggleNode, tick]);
+  }, [agents, agentState, hasFilter, showAll, filterIds, expandedGroups, expandedNodes, userPositions, toggleGroup, toggleNode, tick, subagentChildren]);
 
   // ── handlers ───────────────────────────────────────────────────────────
 
@@ -1621,6 +1874,7 @@ function FlowInner({ filterIds = null }) {
               <FlowStatsPanel
                 agents={agents}
                 agentState={agentState}
+                subagentChildren={subagentChildren}
                 onClose={() => setStatsOpen(false)}
                 tick={tick}
               />
@@ -1776,7 +2030,7 @@ function FlowTotalsOverlay({ agents, agentState }) {
 // Right-side collapsible stats overlay. Shows aggregate metrics across the
 // currently-visible agents: token chart, tools-per-turn bars, top-N kinds,
 // avg duration per kind, plus a strip of counters.
-function FlowStatsPanel({ agents, agentState, onClose, tick }) {
+function FlowStatsPanel({ agents, agentState, subagentChildren, onClose, tick }) {
   void tick; // forces "time since last activity" to refresh.
 
   const stats = useMemo(() => {
@@ -1869,6 +2123,18 @@ function FlowStatsPanel({ agents, agentState, onClose, tick }) {
     const lastSubAgent = subAgentEntries.length ? subAgentEntries[subAgentEntries.length - 1] : null;
     const subAgentAvgMs = subAgentTimed ? Math.round(subAgentTotalMs / subAgentTimed) : 0;
 
+    // Total fetched child tool calls across all loaded sub-agents. Only
+    // sub-agents the user has expanded contribute (their child trace was
+    // lazy-fetched on expand); collapsed ones report 0 here.
+    let subAgentChildCallTotal = 0;
+    if (subagentChildren && typeof subagentChildren === 'object') {
+      for (const v of Object.values(subagentChildren)) {
+        if (v && v.status === 'loaded' && Array.isArray(v.calls)) {
+          subAgentChildCallTotal += v.calls.length;
+        }
+      }
+    }
+
     return {
       tokensHist: allHist,
       totalCalls,
@@ -1882,9 +2148,10 @@ function FlowStatsPanel({ agents, agentState, onClose, tick }) {
       perTurnBars: turns,
       subAgentCount: subAgentEntries.length,
       subAgentAvgMs,
+      subAgentChildCallTotal,
       lastSubAgent,
     };
-  }, [agents, agentState]);
+  }, [agents, agentState, subagentChildren]);
 
   const sincePart = (ts) => {
     if (!ts) return 'never';
@@ -1978,6 +2245,10 @@ function FlowStatsPanel({ agents, agentState, onClose, tick }) {
             <div className="flow-stats__row">
               <span className="flow-stats__row-key">avg time</span>
               <span className="flow-stats__row-val">{stats.subAgentAvgMs ? fmtDuration(stats.subAgentAvgMs) : '--'}</span>
+            </div>
+            <div className="flow-stats__row" title="sum of tool calls inside expanded sub-agents (fetched on demand)">
+              <span className="flow-stats__row-key">total child calls</span>
+              <span className="flow-stats__row-val">{stats.subAgentChildCallTotal || 0}</span>
             </div>
             {stats.lastSubAgent && (
               <div className="flow-stats__row">

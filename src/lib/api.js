@@ -92,6 +92,14 @@ export const api = {
     global: ()            => request('GET',    '/api/bg-terminals'),
   },
 
+  // Sub-agent (child) trace fetch. Sub-agents spawned via the Task tool run
+  // in their own grok sessions, so their tool_call rows aren't on the
+  // parent agent's stream. This shells out to `grok trace <sid>` server-side
+  // and returns the same shape as api.trace(agentId).
+  subagents: {
+    trace: (sessionId) => request('GET', `/api/subagents/${encodeURIComponent(sessionId)}/trace`),
+  },
+
   getSettings:  ()            => request('GET',    '/api/settings'),
   patchSettings:(body)        => request('PATCH',  '/api/settings', body),
 

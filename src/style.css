@@ -6860,6 +6860,16 @@ body::before {
 .flow-subagent-node__status--failed { color: var(--red); }
 .flow-subagent-node__status--canceled { color: var(--dim); }
 .flow-subagent-node__dur { color: var(--muted); font-variant-numeric: tabular-nums; }
+.flow-subagent-node__childinfo {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: italic;
+  margin-left: auto;
+}
+.flow-subagent-node__childinfo--err { color: var(--red); font-style: normal; }
+.flow-tool-node-wrap--subchild .flow-tool-node {
+  border-color: rgba(121, 192, 255, 0.45);
+}
 .flow-subagent-node__body {
   margin-top: 8px;
   padding-top: 8px;

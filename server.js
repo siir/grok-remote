@@ -18,7 +18,7 @@ import { startRetentionTimer } from './lib/retention.js';
 import { inferDevServerUrl } from './lib/dev-url.js';
 import { readAll as readHistory } from './lib/history.js';
 import { writeHeaders as sseHeaders, writeEvent as sseWrite, writePing as ssePing } from './lib/sse.js';
-import { buildTrace } from './lib/trace-host.js';
+import { buildTrace, buildTraceForSessionId } from './lib/trace-host.js';
 import { handleSystem } from './lib/routes/system.js';
 import { runGrokText, errorToResponse } from './lib/grok-cli.js';
 
@@ -172,6 +172,37 @@ async function handleApi(req, res, url, method) {
 
   if (url === '/api/bg-terminals' && method === 'GET') {
     return handleGlobalBgTerminals(req, res);
+  }
+
+  // GET /api/subagents/:sessionId/trace
+  //
+  // The Flow view needs to fetch a sub-agent's own trace (its updates.jsonl
+  // is where the child tool_call rows live). Sub-agents run in their own
+  // grok sessions; we know the sessionId from the parent's tool_call output
+  // but there's no AgentManager record for them. This endpoint accepts a
+  // raw sessionId and reuses the same buildTrace machinery as the agent
+  // endpoint, gated by a UUID-shape check so we never shell out with
+  // arbitrary input.
+  {
+    const sm = url.match(/^\/api\/subagents\/([^\/]+)\/trace$/);
+    if (sm && method === 'GET') {
+      const sid = sm[1];
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!UUID_RE.test(sid)) {
+        return sendJson(res, 400, { ok: false, error: 'invalid sessionId' });
+      }
+      try {
+        const data = await buildTraceForSessionId(sid);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify(data));
+        return;
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message });
+      }
+    }
   }
 
   if (url === '/api/agents' && method === 'POST') {
