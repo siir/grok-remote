@@ -1242,6 +1242,20 @@ export class ChatView {
         el('span', { class: 'bgterms-chip__status' }, 'running'),
       );
       this.bgTermsStripEl.appendChild(chip);
+      // If a local URL was detected for this dev server, render an
+      // adjacent open link so the user can pop straight to it.
+      if (t.url) {
+        const portMatch = t.url.match(/:(\d{2,5})\b/);
+        const portLabel = portMatch ? `:${portMatch[1]}` : 'open';
+        const link = el('a', {
+          class: 'bgterms-open',
+          href: t.url,
+          target: '_blank',
+          rel: 'noopener',
+          title: `open ${t.url}`,
+        }, `↗ ${portLabel}`);
+        this.bgTermsStripEl.appendChild(link);
+      }
     }
     if (exitedCount > 0) {
       this.bgTermsStripEl.appendChild(el('button', {
@@ -1346,6 +1360,7 @@ export class ChatView {
     document.body.appendChild(overlay);
     this._bgTermViewerEl = overlay;
 
+    let openLink = null;
     const refresh = async () => {
       if (!this._bgTermViewerEl) return;
       try {
@@ -1364,6 +1379,25 @@ export class ChatView {
         if (r.exited) {
           killBtn.disabled = true;
           killBtn.textContent = 'killed';
+        }
+        // Surface the detected local URL once we know it. Mount/unmount
+        // the link in-place so we don't re-create it every poll.
+        if (r.url && !r.exited) {
+          if (!openLink) {
+            openLink = el('a', {
+              class: 'bgterm-viewer__open',
+              href: r.url,
+              target: '_blank',
+              rel: 'noopener',
+              title: `open ${r.url}`,
+            }, `open ↗`);
+            status.parentNode.insertBefore(openLink, killBtn);
+          }
+          openLink.href = r.url;
+          openLink.title = `open ${r.url}`;
+        } else if (openLink) {
+          openLink.remove();
+          openLink = null;
         }
       } catch { /* ignore */ }
     };

@@ -572,6 +572,13 @@ function openBgViewer(getSnapshot) {
           el('div', { class: 'bgglobal-viewer__term-cmd' }, t.command || ''),
           el('div', { class: 'bgglobal-viewer__term-cwd' }, t.cwd || ''),
           el('div', { class: 'bgglobal-viewer__term-actions' },
+            (t.url && !exited) && el('a', {
+              class: 'bgglobal-viewer__open-url',
+              href: t.url,
+              target: '_blank',
+              rel: 'noopener',
+              title: `open ${t.url}`,
+            }, `open ↗`),
             el('button', {
               type: 'button', class: 'bgglobal-viewer__open-output',
               onclick: () => {

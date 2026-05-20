@@ -15,6 +15,7 @@ import os from 'node:os';
 import { AgentManager } from './lib/agent-manager.js';
 import { load as loadSettings, save as saveSettings } from './lib/settings.js';
 import { startRetentionTimer } from './lib/retention.js';
+import { inferDevServerUrl } from './lib/dev-url.js';
 import { readAll as readHistory } from './lib/history.js';
 import { writeHeaders as sseHeaders, writeEvent as sseWrite, writePing as ssePing } from './lib/sse.js';
 import { buildTrace } from './lib/trace-host.js';
@@ -738,8 +739,43 @@ function mergeBgSources(a) {
       }
     }
   }
-  // Sort newest first.
+  // Annotate with a detected local URL when the command looks like a dev
+  // server (and either the captured output or the cmdline gives us a port).
+  // ACP terminals carry their buffer in-memory; grok bg tasks have an
+  // output_file on disk we can tail.
+  for (const t of byId.values()) {
+    if (!t.url) {
+      let output = '';
+      if (t.source === 'acp' || t.source === 'merged') {
+        const acpT = host && host._terminals && host._terminals.get(t.id);
+        if (acpT && acpT.buffer) {
+          output = acpT.buffer.toString('utf8', 0, Math.min(acpT.buffer.length, 16 * 1024));
+        }
+      }
+      if (!output && t.outputFile) {
+        try {
+          const buf = readFileTail(t.outputFile, 16 * 1024);
+          if (buf) output = buf.toString('utf8');
+        } catch { /* ignore */ }
+      }
+      const url = inferDevServerUrl(t.command, output);
+      if (url) t.url = url;
+    }
+  }
   return [...byId.values()].sort((x, y) => (y.startedAt || 0) - (x.startedAt || 0));
+}
+
+function readFileTail(filePath, n) {
+  try {
+    const st = fs.statSync(filePath);
+    const size = st.size;
+    if (size <= n) return fs.readFileSync(filePath);
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(n);
+    fs.readSync(fd, buf, 0, n, size - n);
+    fs.closeSync(fd);
+    return buf;
+  } catch { return null; }
 }
 
 function handleTerminalList(req, res, rec) {
@@ -752,6 +788,7 @@ function handleTerminalRead(req, res, rec, tid) {
   const host = a && a.client && a.client.terminalHost;
   const t = host && host._terminals && host._terminals.get(tid);
   if (t) {
+    const output = t.buffer ? t.buffer.toString('utf8') : '';
     return sendJson(res, 200, {
       ok: true,
       id: t.id,
@@ -761,7 +798,8 @@ function handleTerminalRead(req, res, rec, tid) {
       exited: !!t.exited,
       exitStatus: t.exitStatus || null,
       truncated: !!t.truncated,
-      output: t.buffer ? t.buffer.toString('utf8') : '',
+      output,
+      url: inferDevServerUrl(t.command, output),
     });
   }
   // Fall through to grok bg tasks (they have an output_file we tail).
@@ -809,6 +847,7 @@ function handleBgTaskRead(req, res, rec, tid) {
     exitStatus: (t.exit_code != null || t.signal) ? { exitCode: t.exit_code, signal: t.signal } : null,
     truncated,
     output,
+    url: inferDevServerUrl(t.command, output),
   });
 }
 

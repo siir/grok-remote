@@ -834,6 +834,51 @@ body::before {
   letter-spacing: 0.04em;
 }
 .bgterms-more:hover { color: var(--text); border-color: var(--border-2); }
+
+/* Detected dev-server URL: tiny open-in-new-tab link next to a chip. */
+.bgterms-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: rgba(94, 234, 212, 0.08);
+  border: 1px solid rgba(94, 234, 212, 0.45);
+  border-radius: 999px;
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+}
+.bgterms-open:hover { background: rgba(94, 234, 212, 0.16); }
+
+/* In the per-conversation single-terminal viewer */
+.bgterm-viewer__open {
+  background: rgba(94, 234, 212, 0.08);
+  border: 1px solid var(--teal);
+  color: var(--teal);
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-decoration: none;
+}
+.bgterm-viewer__open:hover { background: rgba(94, 234, 212, 0.16); }
+
+/* In the global viewer rows */
+.bgglobal-viewer__open-url {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(94, 234, 212, 0.08);
+  border: 1px solid var(--teal);
+  color: var(--teal);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-decoration: none;
+}
+.bgglobal-viewer__open-url:hover { background: rgba(94, 234, 212, 0.16); }
 .bgterms-chip__dot {
   width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
   background: var(--teal);
