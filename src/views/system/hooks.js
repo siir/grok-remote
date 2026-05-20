@@ -11,6 +11,7 @@
 
 import {
   loadInspect, buildPageShell, setStatusLine, clearBody,
+  addConfigFilesBanner,
   buildGroup, buildItem, emptyState, buildFooterHint, copyToClipboard,
   shortenPath, scopeLabel,
 } from './_native_common.js';
@@ -49,6 +50,11 @@ async function reload(section) {
   if (aborted) return;
   if (error) { setStatusLine(section, 'failed to load: ' + error); return; }
   const hooks = Array.isArray(inspect && inspect.hooks) ? inspect.hooks : [];
+  const cs = (inspect && inspect.configSources) || {};
+  addConfigFilesBanner(section, [
+    cs.userPath && { label: 'user config', path: cs.userPath },
+    ...(Array.isArray(cs.projectPaths) ? cs.projectPaths.map(p => ({ label: 'project config', path: p })) : []),
+  ].filter(Boolean));
   clearBody(section);
 
   if (!hooks.length) {
@@ -127,6 +133,10 @@ function makeHookCard(h) {
     tags,
     description: '',
     path: tgt ? shortenPath(tgt) : '',
+    sourceLabel: pluginTag
+      ? `from plugin: ${pluginTag}`
+      : (h.source?.type ? `defined in ${scopeLabel(h.source.type)}:` : 'defined in:'),
+    sourcePath: h.source?.path || '',
     fullRecord: h,
     actions,
     pluginTag,

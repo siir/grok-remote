@@ -10,6 +10,7 @@
 
 import {
   loadInspect, buildPageShell, setStatusLine, clearBody,
+  addConfigFilesBanner,
   buildGroup, buildItem, emptyState, buildFooterHint, copyToClipboard,
   shortenPath, scopeLabel,
 } from './_native_common.js';
@@ -46,6 +47,11 @@ async function reload(section) {
   if (error) { setStatusLine(section, 'failed to load: ' + error); return; }
 
   const items = Array.isArray(inspect && inspect.lspServers) ? inspect.lspServers : [];
+  const cs = (inspect && inspect.configSources) || {};
+  addConfigFilesBanner(section, [
+    cs.userPath && { label: 'user config', path: cs.userPath },
+    ...(Array.isArray(cs.projectPaths) ? cs.projectPaths.map(p => ({ label: 'project config', path: p })) : []),
+  ].filter(Boolean));
   clearBody(section);
 
   if (!items.length) {
@@ -108,6 +114,10 @@ function makeLspCard(s) {
     secondary: cmd || null,
     tags,
     path: shortenPath(target),
+    sourceLabel: s.source?.plugin_name
+      ? `from plugin: ${s.source.plugin_name}`
+      : (s.source?.type ? `defined in ${scopeLabel(s.source.type)}:` : 'defined in:'),
+    sourcePath: s.source?.path || '',
     fullRecord: s,
     actions,
   });

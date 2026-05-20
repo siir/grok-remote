@@ -9,6 +9,7 @@
 
 import {
   loadInspect, buildPageShell, setStatusLine, clearBody,
+  addConfigFilesBanner,
   buildGroup, buildItem, emptyState, buildFooterHint, copyToClipboard,
   shortenPath, scopeLabel,
 } from './_native_common.js';
@@ -44,6 +45,11 @@ async function reload(section) {
   if (error) { setStatusLine(section, 'failed to load: ' + error); return; }
 
   const items = Array.isArray(inspect && inspect.marketplaces) ? inspect.marketplaces : [];
+  const cs = (inspect && inspect.configSources) || {};
+  addConfigFilesBanner(section, [
+    cs.userPath && { label: 'user config', path: cs.userPath },
+    ...(Array.isArray(cs.projectPaths) ? cs.projectPaths.map(p => ({ label: 'project config', path: p })) : []),
+  ].filter(Boolean));
   clearBody(section);
 
   if (!items.length) {
@@ -102,6 +108,8 @@ function makeMarketplaceCard(m) {
     secondary: m.url ? 'remote' : 'local',
     tags,
     path: shortenPath(m.url || m.path || ''),
+    sourceLabel: m.scope ? `registered in ${scopeLabel(m.scope)}:` : 'source:',
+    sourcePath: m.path || m.url || '',
     fullRecord: m,
     actions,
   });

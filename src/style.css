@@ -5311,6 +5311,41 @@ body::before {
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s;
 }
+/* Page-level config-file banner. Shown just under the page blurb on the
+   native-config pages (hooks, agents, plugins, marketplaces, lsp). Lists
+   the canonical files/dirs that own this concept with a copy button. */
+.system-page-configfiles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+.system-page-configfile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.system-page-configfile-label {
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9.5px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  min-width: 90px;
+}
+.system-page-configfile .health-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-all;
+  color: var(--muted);
+}
+
 .health-copy-btn:hover {
   color: var(--teal);
   border-color: var(--teal);

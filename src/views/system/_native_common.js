@@ -34,7 +34,53 @@ export async function loadInspect() {
 }
 
 /** Render the standard page chrome (title + blurb), returning the section element. */
-export function buildPageShell(container, { title, blurb }) {
+// Append a config-file banner to an existing page section (call this after
+// the inspect payload arrives so paths land directly from configSources).
+export function addConfigFilesBanner(section, configFiles) {
+  if (!section || !Array.isArray(configFiles) || !configFiles.length) return;
+  const header = section.querySelector('.system-page-header');
+  if (!header) return;
+  // Remove any previously-rendered banner so re-renders don't stack.
+  const prev = header.querySelector('.system-page-configfiles');
+  if (prev) prev.remove();
+  const banner = document.createElement('div');
+  banner.className = 'system-page-configfiles';
+  for (const cf of configFiles) {
+    if (!cf || (!cf.path && !cf.label)) continue;
+    const row = document.createElement('div');
+    row.className = 'system-page-configfile';
+    if (cf.label) {
+      const lbl = document.createElement('span');
+      lbl.className = 'system-page-configfile-label';
+      lbl.textContent = cf.label;
+      row.appendChild(lbl);
+    }
+    if (cf.path) {
+      const code = document.createElement('code');
+      code.className = 'health-path';
+      code.textContent = cf.path;
+      row.appendChild(code);
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'health-copy-btn';
+      copyBtn.textContent = 'copy';
+      copyBtn.title = 'copy path to clipboard';
+      copyBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(cf.path);
+          copyBtn.textContent = 'copied';
+          setTimeout(() => { copyBtn.textContent = 'copy'; }, 1200);
+        } catch { /* ignore */ }
+      });
+      row.appendChild(copyBtn);
+    }
+    banner.appendChild(row);
+  }
+  header.appendChild(banner);
+}
+
+export function buildPageShell(container, { title, blurb, configFiles }) {
   container.replaceChildren();
   const section = document.createElement('section');
   section.className = 'system-page';
@@ -49,6 +95,47 @@ export function buildPageShell(container, { title, blurb }) {
   p.innerHTML = blurb;
   header.appendChild(h2);
   header.appendChild(p);
+
+  // Canonical config-file banner. Lists the file(s) that own this concept
+  // so users know where to look + edit. Each entry: { label, path }. Path
+  // gets a copy button next to it (handy for paste-into-terminal flows).
+  if (Array.isArray(configFiles) && configFiles.length) {
+    const banner = document.createElement('div');
+    banner.className = 'system-page-configfiles';
+    for (const cf of configFiles) {
+      if (!cf || (!cf.path && !cf.label)) continue;
+      const row = document.createElement('div');
+      row.className = 'system-page-configfile';
+      if (cf.label) {
+        const lbl = document.createElement('span');
+        lbl.className = 'system-page-configfile-label';
+        lbl.textContent = cf.label;
+        row.appendChild(lbl);
+      }
+      if (cf.path) {
+        const code = document.createElement('code');
+        code.className = 'health-path';
+        code.textContent = cf.path;
+        row.appendChild(code);
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'health-copy-btn';
+        copyBtn.textContent = 'copy';
+        copyBtn.title = 'copy path to clipboard';
+        copyBtn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(cf.path);
+            copyBtn.textContent = 'copied';
+            setTimeout(() => { copyBtn.textContent = 'copy'; }, 1200);
+          } catch { /* ignore */ }
+        });
+        row.appendChild(copyBtn);
+      }
+      banner.appendChild(row);
+    }
+    header.appendChild(banner);
+  }
   section.appendChild(header);
 
   const status = document.createElement('div');
@@ -138,6 +225,7 @@ export function buildGroup({ label, count, openByDefault = true }) {
 export function buildItem({
   primary, secondary, secondaryClass,
   tags, description, path,
+  sourceLabel, sourcePath,
   fullRecord, actions, pluginTag,
 }) {
   const card = document.createElement('div');
@@ -215,6 +303,41 @@ export function buildItem({
     code.className = 'health-path health-item-path';
     code.textContent = path;
     card.appendChild(code);
+  }
+
+  // Source attribution. When sourcePath is provided, render a dashed-top
+  // row showing where this config item is defined plus a copy-to-clipboard
+  // button so users can paste the path into a terminal or editor.
+  if (sourceLabel || sourcePath) {
+    const src = document.createElement('div');
+    src.className = 'health-item-source';
+    if (sourceLabel) {
+      const lbl = document.createElement('span');
+      lbl.className = 'health-item-source-label';
+      lbl.textContent = sourceLabel;
+      src.appendChild(lbl);
+    }
+    if (sourcePath) {
+      const code = document.createElement('code');
+      code.className = 'health-path';
+      code.textContent = sourcePath;
+      src.appendChild(code);
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'health-copy-btn';
+      copyBtn.textContent = 'copy';
+      copyBtn.title = 'copy path to clipboard';
+      copyBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(sourcePath);
+          copyBtn.textContent = 'copied';
+          setTimeout(() => { copyBtn.textContent = 'copy'; }, 1200);
+        } catch { /* ignore */ }
+      });
+      src.appendChild(copyBtn);
+    }
+    card.appendChild(src);
   }
 
   const body = document.createElement('pre');

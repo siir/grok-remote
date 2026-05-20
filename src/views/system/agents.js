@@ -14,6 +14,7 @@
 import { api } from '../../lib/api.js';
 import {
   loadInspect, buildPageShell, setStatusLine, clearBody,
+  addConfigFilesBanner,
   buildGroup, emptyState, buildFooterHint,
   shortenPath, scopeLabel, safeStringify,
 } from './_native_common.js';
@@ -55,6 +56,15 @@ async function reload(section) {
   cachedInspect = inspect;
 
   const agents = Array.isArray(inspect && inspect.agents) ? inspect.agents : [];
+  // Canonical roots where subagent .md files live. We can derive them from
+  // any user/project agent path; fall back to the standard locations.
+  const userRoot = agents.find(a => a.source?.type === 'user' && a.source?.path)?.source?.path?.replace(/\/[^/]+\.md$/, '');
+  const projRoot = agents.find(a => (a.source?.type === 'project' || a.source?.type === 'cwd' || a.source?.type === 'workspace') && a.source?.path)?.source?.path?.replace(/\/[^/]+\.md$/, '');
+  const cwd = inspect && inspect.cwd;
+  addConfigFilesBanner(section, [
+    { label: 'user agents', path: userRoot || '~/.grok/agents' },
+    cwd && { label: 'project agents', path: projRoot || `${cwd}/.grok/agents` },
+  ].filter(Boolean));
   clearBody(section);
 
   // Toolbar: "new" buttons for the writable scopes.
@@ -180,10 +190,33 @@ function makeAgentCard(a, section) {
     card.appendChild(p);
   }
   if (fromPath) {
+    const src = document.createElement('div');
+    src.className = 'health-item-source';
+    const lbl = document.createElement('span');
+    lbl.className = 'health-item-source-label';
+    lbl.textContent = a.source?.plugin_name
+      ? `from plugin: ${a.source.plugin_name}`
+      : `defined in ${scopeLabel(srcType || 'user')}:`;
+    src.appendChild(lbl);
     const code = document.createElement('code');
-    code.className = 'health-path health-item-path';
-    code.textContent = shortenPath(fromPath);
-    card.appendChild(code);
+    code.className = 'health-path';
+    code.textContent = fromPath;
+    src.appendChild(code);
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'health-copy-btn';
+    copyBtn.textContent = 'copy';
+    copyBtn.title = 'copy path to clipboard';
+    copyBtn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(fromPath);
+        copyBtn.textContent = 'copied';
+        setTimeout(() => { copyBtn.textContent = 'copy'; }, 1200);
+      } catch { /* ignore */ }
+    });
+    src.appendChild(copyBtn);
+    card.appendChild(src);
   } else if (srcType === 'builtin') {
     const note = document.createElement('div');
     note.className = 'health-item-source';

@@ -12,6 +12,7 @@
 
 import {
   loadInspect, buildPageShell, setStatusLine, clearBody,
+  addConfigFilesBanner,
   buildGroup, buildItem, emptyState, buildFooterHint, copyToClipboard,
   shortenPath, scopeLabel,
 } from './_native_common.js';
@@ -49,6 +50,11 @@ async function reload(section) {
   if (error) { setStatusLine(section, 'failed to load: ' + error); return; }
 
   const plugins = Array.isArray(inspect && inspect.plugins) ? inspect.plugins : [];
+  const cs = (inspect && inspect.configSources) || {};
+  addConfigFilesBanner(section, [
+    cs.userPath && { label: 'user config', path: cs.userPath },
+    ...(Array.isArray(cs.projectPaths) ? cs.projectPaths.map(p => ({ label: 'project config', path: p })) : []),
+  ].filter(Boolean));
   clearBody(section);
 
   if (!plugins.length) {
@@ -121,6 +127,8 @@ function makePluginCard(p) {
     secondaryClass: enabled ? 'health-good' : 'health-warn',
     tags,
     path: p.path ? shortenPath(p.path) : '',
+    sourceLabel: p.scope ? `installed in ${scopeLabel(p.scope)}:` : 'installed at:',
+    sourcePath: p.path || '',
     fullRecord: p,
     actions,
   });
