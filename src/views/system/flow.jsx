@@ -472,6 +472,286 @@ function groupToolCalls(sortedCalls) {
   return out;
 }
 
+// ── event dispatcher (pure) ───────────────────────────────────────────────
+//
+// applyAgentEventToState takes a state slot for one agent + an SSE event
+// (name + payload) and returns the new slot. Pure so we can use it for both
+// live SSE events (via patchAgent's updater form) and bulk history replay
+// (composed in a tight loop, then committed with one setAgentState).
+//
+// `opts.at` is the event's wall-clock timestamp in ms (Date.parse(ev.at) for
+// history, Date.now() for live). `opts.fromHistory` lets the dispatcher
+// suppress live-only effects later if we ever need to.
+function applyAgentEventToState(cur, name, payload, opts) {
+  const at = (opts && Number.isFinite(opts.at)) ? opts.at : Date.now();
+
+  // Token bump shared by every event that may carry _meta.totalTokens.
+  const bumpTokensInto = (state, data) => {
+    const t = data && data._meta && Number(data._meta.totalTokens);
+    if (!Number.isFinite(t) || t <= 0) return state;
+    if (t <= (state.tokens || 0)) return state; // monotone; skip duplicates
+    const hist = Array.isArray(state.tokensHistory) ? state.tokensHistory.slice() : [];
+    hist.push({ t: at, v: t });
+    if (hist.length > TOKEN_HISTORY_MAX) hist.splice(0, hist.length - TOKEN_HISTORY_MAX);
+    return { ...state, tokens: t, tokensHistory: hist, lastActivityAt: at };
+  };
+
+  switch (name) {
+    case 'agent_status': {
+      if (!payload) return cur;
+      const status = normaliseStatus(payload.status || payload.state);
+      return { ...cur, status, lastActivityAt: at };
+    }
+
+    case 'tool_call': {
+      if (!payload) return cur;
+      let next = bumpTokensInto(cur, payload);
+      const u = (payload.update && typeof payload.update === 'object') ? payload.update : payload;
+      const id = u.toolCallId || u.id || `tc-${at}-${Math.random()}`;
+      const kind = (payload._meta && payload._meta.updateParams && payload._meta.updateParams.kind)
+                || u.kind || '';
+      const label = isSubAgentCall(u) ? pickSubAgentLabel(u) : pickToolLabel(u);
+      const status = (payload._meta && payload._meta.updateParams && payload._meta.updateParams.status)
+                  || u.status || 'Pending';
+
+      if (isSubAgentCall(u)) {
+        const prompt = (u.rawInput && (u.rawInput.prompt || u.rawInput.task || u.rawInput.input)) || null;
+        const prevSubs = Array.isArray(next.subAgents) ? next.subAgents : [];
+        const turn = (next.turn || 0) + (next._turnHasMilestone ? 0 : 1);
+        const firstThisTurn = !prevSubs.some(s => s._turnSpawn === turn);
+        let subAgents;
+        if (prevSubs.some(s => s.id === id)) {
+          subAgents = prevSubs;
+        } else {
+          subAgents = prevSubs.concat([{
+            id,
+            kind,
+            label,
+            parentToolCallId: id,
+            status,
+            prompt,
+            response: [],
+            toolCalls: [],
+            rawInput: u.rawInput || null,
+            startedAt: at,
+            endedAt: null,
+            _turnSpawn: turn,
+          }]);
+        }
+        let ms = (next.milestones || []).slice();
+        if (firstThisTurn) {
+          ms.push({ kind: 'sub-agent-spawn', icon: 'S', label: `turn ${turn} spawned sub-agent`, t: at });
+        }
+        ms.push({ kind: 'sub-agent-start', icon: 'S', label: `sub-agent started: ${truncCmd(label)}`, t: at });
+        if (ms.length > MILESTONE_CAP) ms = ms.slice(ms.length - MILESTONE_CAP);
+        next = { ...next, status: 'running', subAgents, milestones: ms, lastActivityAt: at };
+        if (!next._turnHasMilestone) {
+          const nTurn = (next.turn || 0) + 1;
+          const ms2 = (next.milestones || []).slice();
+          ms2.push({ kind: 'turn', icon: 'T', label: `turn ${nTurn}`, t: at });
+          if (ms2.length > MILESTONE_CAP) ms2.splice(0, ms2.length - MILESTONE_CAP);
+          next = { ...next, turn: nTurn, milestones: ms2, _turnHasMilestone: true };
+        }
+        return next;
+      }
+
+      const calls = { ...next.calls, [id]: {
+        id,
+        kind,
+        label,
+        status,
+        rawInput: u.rawInput || null,
+        rawOutput: u.rawOutput || null,
+        content: extractToolContent(u.content),
+        locations: Array.isArray(u.locations) ? u.locations.slice() : [],
+        startedAt: at,
+        endedAt: null,
+      } };
+      const inflight = countActive(calls);
+      const peak = Math.max(next.peakInFlight || 0, inflight);
+      next = { ...next, status: 'running', inFlight: inflight, peakInFlight: peak, calls, lastActivityAt: at };
+      if (!next._turnHasMilestone) {
+        const nTurn = (next.turn || 0) + 1;
+        const ms2 = (next.milestones || []).slice();
+        ms2.push({ kind: 'turn', icon: 'T', label: `turn ${nTurn}`, t: at });
+        if (ms2.length > MILESTONE_CAP) ms2.splice(0, ms2.length - MILESTONE_CAP);
+        next = { ...next, turn: nTurn, milestones: ms2, _turnHasMilestone: true };
+      }
+      return next;
+    }
+
+    case 'tool_call_update': {
+      if (!payload) return cur;
+      let next = bumpTokensInto(cur, payload);
+      const u = (payload.update && typeof payload.update === 'object') ? payload.update : payload;
+      const id = u.toolCallId || u.id;
+      if (!id) return next;
+      const status = (payload._meta && payload._meta.updateParams && payload._meta.updateParams.status)
+                  || u.status || 'Running';
+      const done = (status === 'Completed' || status === 'Failed' || status === 'canceled');
+
+      const subs = Array.isArray(next.subAgents) ? next.subAgents : [];
+      const subIdx = subs.findIndex(s => s.id === id);
+      const isSubKind = isSubAgentCall(u);
+      if (subIdx >= 0 || isSubKind) {
+        if (subIdx < 0) {
+          const prompt = (u.rawInput && (u.rawInput.prompt || u.rawInput.task || u.rawInput.input)) || null;
+          const newSub = {
+            id,
+            kind: u.kind || '',
+            label: pickSubAgentLabel(u),
+            parentToolCallId: id,
+            status,
+            prompt,
+            response: u.content ? extractToolContent(u.content) : [],
+            toolCalls: [],
+            rawInput: u.rawInput || null,
+            startedAt: at,
+            endedAt: done ? at : null,
+            _turnSpawn: next.turn || 1,
+          };
+          return { ...next, subAgents: subs.concat([newSub]), lastActivityAt: at };
+        }
+        const prev = subs[subIdx];
+        const newContent = u.content
+          ? mergeToolContent(prev.response, extractToolContent(u.content))
+          : prev.response;
+        let ms = (next.milestones || []).slice();
+        if (done && !prev.endedAt) {
+          ms.push({
+            kind: status === 'Failed' ? 'sub-agent-fail' : 'sub-agent-end',
+            icon: 'S',
+            label: `sub-agent ${String(status).toLowerCase()}: ${truncCmd(prev.label)}`,
+            t: at,
+          });
+          if (ms.length > MILESTONE_CAP) ms = ms.slice(ms.length - MILESTONE_CAP);
+        }
+        const merged = {
+          ...prev,
+          kind: u.kind || prev.kind,
+          label: pickSubAgentLabel(u) || prev.label,
+          status,
+          rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
+          response: newContent,
+          endedAt: done ? (prev.endedAt || at) : prev.endedAt,
+        };
+        const nextSubs = subs.slice();
+        nextSubs[subIdx] = merged;
+        return { ...next, subAgents: nextSubs, milestones: ms, lastActivityAt: at };
+      }
+
+      const prev = next.calls && next.calls[id] ? next.calls[id] : {
+        id,
+        kind: u.kind || '',
+        label: pickToolLabel(u),
+        status: 'Pending',
+        rawInput: null,
+        rawOutput: null,
+        content: [],
+        locations: [],
+        startedAt: at,
+        endedAt: null,
+      };
+      const nextContent = u.content
+        ? mergeToolContent(prev.content, extractToolContent(u.content))
+        : prev.content;
+      const merged = {
+        ...prev,
+        kind: u.kind || prev.kind,
+        label: pickToolLabel(u) || prev.label,
+        status,
+        rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
+        rawOutput: (u.rawOutput != null) ? u.rawOutput : prev.rawOutput,
+        content: nextContent,
+        locations: Array.isArray(u.locations) && u.locations.length ? u.locations.slice() : prev.locations,
+        endedAt: done ? (prev.endedAt || at) : prev.endedAt,
+      };
+      const calls = { ...(next.calls || {}), [id]: merged };
+      return { ...next, inFlight: countActive(calls), calls, lastActivityAt: at };
+    }
+
+    case 'agent_message_chunk': {
+      if (!payload) return cur;
+      let next = bumpTokensInto(cur, payload);
+      next = { ...next, status: next.status === 'errored' ? next.status : 'running', lastActivityAt: at };
+      return next;
+    }
+
+    case 'agent_thought_chunk': {
+      if (!payload) return cur;
+      return bumpTokensInto(cur, payload);
+    }
+
+    case 'user_message_chunk': {
+      if (!payload) return cur;
+      return { ...cur, lastUserAt: at, lastActivityAt: at };
+    }
+
+    case 'prompt_complete': {
+      let next = bumpTokensInto(cur, payload || {});
+      const turn = next.turn || 0;
+      let ms = (next.milestones || []).slice();
+      if (turn > 0) {
+        ms.push({ kind: 'turn-end', icon: 'D', label: `turn ${turn} done`, t: at });
+        if (ms.length > MILESTONE_CAP) ms = ms.slice(ms.length - MILESTONE_CAP);
+      }
+      return { ...next, status: 'idle', milestones: ms, _turnHasMilestone: false, lastActivityAt: at };
+    }
+
+    case 'task_backgrounded':
+    case 'x.ai/task_backgrounded': {
+      const u = (payload && payload.update) || (payload && payload.params && payload.params.update) || payload;
+      if (!u) return cur;
+      const cmd = u.command || u.cmd || '';
+      const ms = (cur.milestones || []).slice();
+      const last = ms[ms.length - 1];
+      const m = { kind: 'bg-start', icon: 'U', label: `started ${truncCmd(cmd)}`, t: at };
+      if (last && last.kind === m.kind && last.label === m.label && (m.t - last.t) < 1000) return cur;
+      ms.push(m);
+      if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
+      return { ...cur, milestones: ms, lastActivityAt: at };
+    }
+
+    case 'task_completed':
+    case 'x.ai/task_completed': {
+      const u = (payload && payload.update) || (payload && payload.params && payload.params.update) || payload;
+      if (!u) return cur;
+      const snap = u.task_snapshot || {};
+      const cmd = snap.command || u.command || '';
+      const ms = (cur.milestones || []).slice();
+      const last = ms[ms.length - 1];
+      const m = { kind: 'bg-end', icon: 'V', label: `finished ${truncCmd(cmd)}`, t: at };
+      if (last && last.kind === m.kind && last.label === m.label && (m.t - last.t) < 1000) return cur;
+      ms.push(m);
+      if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
+      return { ...cur, milestones: ms, lastActivityAt: at };
+    }
+
+    default:
+      return cur;
+  }
+}
+
+// Build an empty state slot, hydrating tokensHistory from sessionStorage so
+// the sparkline survives reloads even before replay finishes.
+function freshAgentState(id) {
+  const persisted = loadTokenHistory(id);
+  const lastTok = persisted.length ? persisted[persisted.length - 1].v : 0;
+  return {
+    status: 'idle',
+    tokens: lastTok,
+    inFlight: 0,
+    peakInFlight: 0,
+    calls: {},
+    tokensHistory: persisted,
+    bgTerminals: [],
+    milestones: [],
+    turn: 0,
+    lastActivityAt: 0,
+    lastUserAt: 0,
+  };
+}
+
 // ── main app ──────────────────────────────────────────────────────────────
 
 // `filterIds` (optional) limits the canvas to a fixed set of agent ids.
@@ -492,6 +772,7 @@ function FlowInner({ filterIds = null }) {
 
   // Mutable refs that survive re-renders without re-subscribing effects.
   const streamsRef    = useRef(new Map()); // id -> EventSource
+  const replayedRef   = useRef(new Set()); // agent ids whose history we already replayed
   const pollTimerRef  = useRef(null);
   const bgPollTimerRef = useRef(null);
 
@@ -511,24 +792,7 @@ function FlowInner({ filterIds = null }) {
     setAgentState((prev) => {
       // Hydrate tokensHistory from sessionStorage on first touch so the
       // sparkline survives page reloads + view remounts.
-      let cur = prev[id];
-      if (!cur) {
-        const persisted = loadTokenHistory(id);
-        const lastTok = persisted.length ? persisted[persisted.length - 1].v : 0;
-        cur = {
-          status: 'idle',
-          tokens: lastTok,
-          inFlight: 0,
-          peakInFlight: 0,
-          calls: {},
-          tokensHistory: persisted,
-          bgTerminals: [],
-          milestones: [],
-          turn: 0,
-          lastActivityAt: 0,
-          lastUserAt: 0,
-        };
-      }
+      const cur = prev[id] || freshAgentState(id);
       const next = typeof patch === 'function' ? patch(cur) : { ...cur, ...patch };
       // Persist when history grew. Cheap; runs at most ~2/sec per agent.
       if (next.tokensHistory && next.tokensHistory !== cur.tokensHistory) {
@@ -538,24 +802,62 @@ function FlowInner({ filterIds = null }) {
     });
   }, []);
 
-  const pushMilestone = useCallback((id, m) => {
-    patchAgent(id, (cur) => {
-      const ms = cur.milestones ? cur.milestones.slice() : [];
-      // Dedup adjacent identical milestones (same kind + label within 1s).
-      const last = ms[ms.length - 1];
-      if (last && last.kind === m.kind && last.label === m.label && (m.t - last.t) < 1000) {
-        return cur;
+  // ── SSE wiring ─────────────────────────────────────────────────────────
+
+  // Live event dispatcher. Routes one SSE event through the same pure
+  // state-mutation helper that history replay uses, so live and replay
+  // paths can never diverge.
+  const applyAgentEvent = useCallback((agent, name, payload, opts) => {
+    patchAgent(agent.id, (cur) => applyAgentEventToState(cur, name, payload, opts || {}));
+  }, [patchAgent]);
+
+  // Walks history.jsonl events for an agent, applying each through the same
+  // pure dispatcher live events use. Batched into a single setAgentState so
+  // React only re-renders once per replay (vs ~thousands of patchAgent calls).
+  const replayHistoryFor = useCallback(async (agent) => {
+    if (!agent || !agent.id) return;
+    if (replayedRef.current.has(agent.id)) return;
+    replayedRef.current.add(agent.id);
+    let hist;
+    try {
+      hist = await api.history(agent.id, { all: true });
+    } catch {
+      // Server error or 404. Allow a future retry by clearing the marker.
+      replayedRef.current.delete(agent.id);
+      return;
+    }
+    const events = Array.isArray(hist && hist.events) ? hist.events : [];
+    if (!events.length) {
+      // Still mark replayed so we don't refetch on every effect tick.
+      patchAgent(agent.id, (cur) => ({ ...cur, _replayed: true }));
+      return;
+    }
+    const slice = events.length > HISTORY_REPLAY_MAX
+      ? events.slice(events.length - HISTORY_REPLAY_MAX)
+      : events;
+    setAgentState((prev) => {
+      let cur = prev[agent.id] || freshAgentState(agent.id);
+      for (const ev of slice) {
+        if (!ev || typeof ev !== 'object') continue;
+        const at = ev.at ? Date.parse(ev.at) : NaN;
+        cur = applyAgentEventToState(cur, ev.event, ev.data, {
+          fromHistory: true,
+          at: Number.isFinite(at) ? at : Date.now(),
+        });
       }
-      ms.push(m);
-      if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
-      return { ...cur, milestones: ms, lastActivityAt: m.t };
+      cur = { ...cur, _replayed: true };
+      if (cur.tokensHistory) saveTokenHistory(agent.id, cur.tokensHistory);
+      return { ...prev, [agent.id]: cur };
     });
   }, [patchAgent]);
 
-  // ── SSE wiring ─────────────────────────────────────────────────────────
-
   const openStreamFor = useCallback((agent) => {
     if (streamsRef.current.has(agent.id)) return;
+    // Kick off history replay first. Don't await; SSE can open in parallel
+    // and any overlap dedups naturally through toolCallId merges + monotone
+    // token bumps.
+    replayHistoryFor(agent);
+
     const url = `/api/agents/${encodeURIComponent(agent.id)}/stream`;
     let es;
     try {
@@ -569,286 +871,30 @@ function FlowInner({ filterIds = null }) {
       try { return JSON.parse(raw); } catch { return null; }
     };
 
-    const bumpTokens = (data) => {
-      const t = data && data._meta && Number(data._meta.totalTokens);
-      if (Number.isFinite(t) && t > 0) {
-        patchAgent(agent.id, (cur) => {
-          if (t <= cur.tokens) return cur; // monotone; skip duplicates
-          const hist = Array.isArray(cur.tokensHistory) ? cur.tokensHistory.slice() : [];
-          hist.push({ t: Date.now(), v: t });
-          // Cap to 60 samples to keep memory bounded but give the bigger
-          // stats chart something to chew on.
-          if (hist.length > 60) hist.splice(0, hist.length - 60);
-          return { ...cur, tokens: t, tokensHistory: hist, lastActivityAt: Date.now() };
-        });
-      }
+    const live = (name) => (ev) => {
+      const data = safeParse(ev.data);
+      if (data == null && name !== 'prompt_complete') return;
+      applyAgentEvent(agent, name, data, {});
     };
 
-    es.addEventListener('agent_status', (ev) => {
-      const data = safeParse(ev.data);
-      if (!data) return;
-      const status = normaliseStatus(data.status || data.state);
-      patchAgent(agent.id, (cur) => ({ ...cur, status, lastActivityAt: Date.now() }));
-    });
-
-    es.addEventListener('tool_call', (ev) => {
-      const raw = safeParse(ev.data);
-      if (!raw) return;
-      bumpTokens(raw);
-      // The wire payload from the agent stream is wrapped: { update, _meta, sessionId, _t }.
-      // The actual ACP tool_call object lives in update; some history paths
-      // serve it flat, so accept either.
-      const u = (raw.update && typeof raw.update === 'object') ? raw.update : raw;
-      const id     = u.toolCallId || u.id || `tc-${Date.now()}-${Math.random()}`;
-      const kind   = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.kind)
-                  || u.kind || '';
-      const label  = isSubAgentCall(u) ? pickSubAgentLabel(u) : pickToolLabel(u);
-      const status = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.status) || u.status || 'Pending';
-      const startedAt = Date.now();
-
-      // Sub-agent invocations get peeled off into their own state slot so we
-      // can visualize the parent -> child hierarchy. Mirrors the regular
-      // tool_call plumbing.
-      if (isSubAgentCall(u)) {
-        const prompt = (u.rawInput && (u.rawInput.prompt || u.rawInput.task || u.rawInput.input)) || null;
-        patchAgent(agent.id, (cur) => {
-          const prevSubs = Array.isArray(cur.subAgents) ? cur.subAgents : [];
-          const turn = (cur.turn || 0) + (cur._turnHasMilestone ? 0 : 1);
-          const firstThisTurn = !prevSubs.some(s => s._turnSpawn === turn);
-          let subAgents;
-          if (prevSubs.some(s => s.id === id)) {
-            subAgents = prevSubs;
-          } else {
-            subAgents = prevSubs.concat([{
-              id,
-              kind,
-              label,
-              parentToolCallId: id,
-              status,
-              prompt,
-              response: [],
-              toolCalls: [],
-              rawInput: u.rawInput || null,
-              startedAt,
-              endedAt: null,
-              _turnSpawn: turn,
-            }]);
-          }
-          const ms = (cur.milestones || []).slice();
-          if (firstThisTurn) {
-            ms.push({ kind: 'sub-agent-spawn', icon: 'S', label: `turn ${turn} spawned sub-agent`, t: startedAt });
-          }
-          ms.push({ kind: 'sub-agent-start', icon: 'S', label: `sub-agent started: ${truncCmd(label)}`, t: startedAt });
-          if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
-          return {
-            ...cur,
-            status: 'running',
-            subAgents,
-            milestones: ms,
-            lastActivityAt: startedAt,
-          };
-        });
-        // Still bump the turn milestone like a regular tool call.
-        patchAgent(agent.id, (cur) => {
-          if (cur._turnHasMilestone) return cur;
-          const turn = (cur.turn || 0) + 1;
-          const ms = (cur.milestones || []).slice();
-          ms.push({ kind: 'turn', icon: 'T', label: `turn ${turn}`, t: startedAt });
-          if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
-          return { ...cur, turn, milestones: ms, _turnHasMilestone: true };
-        });
-        return;
-      }
-
-      patchAgent(agent.id, (cur) => {
-        const calls = { ...cur.calls, [id]: {
-          id,
-          kind,
-          label,
-          status,
-          rawInput: u.rawInput || null,
-          rawOutput: u.rawOutput || null,
-          content: extractToolContent(u.content),
-          locations: Array.isArray(u.locations) ? u.locations.slice() : [],
-          startedAt,
-          endedAt: null,
-        } };
-        const inflight = countActive(calls);
-        const peak = Math.max(cur.peakInFlight || 0, inflight);
-        return { ...cur, status: 'running', inFlight: inflight, peakInFlight: peak, calls, lastActivityAt: startedAt };
-      });
-      // Mark a new "turn" milestone the first time we see a tool call for
-      // a turn that doesn't have one yet.
-      patchAgent(agent.id, (cur) => {
-        if (cur._turnHasMilestone) return cur;
-        const turn = (cur.turn || 0) + 1;
-        const ms = (cur.milestones || []).slice();
-        ms.push({ kind: 'turn', icon: 'T', label: `turn ${turn}`, t: startedAt });
-        if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
-        return { ...cur, turn, milestones: ms, _turnHasMilestone: true };
-      });
-    });
-
-    es.addEventListener('tool_call_update', (ev) => {
-      const raw = safeParse(ev.data);
-      if (!raw) return;
-      bumpTokens(raw);
-      const u = (raw.update && typeof raw.update === 'object') ? raw.update : raw;
-      const id      = u.toolCallId || u.id;
-      if (!id) return;
-      const status  = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.status)
-                    || u.status || 'Running';
-      const done    = (status === 'Completed' || status === 'Failed' || status === 'canceled');
-
-      // Single state mutation: if the id belongs to an existing sub-agent
-      // OR the update advertises an Agent kind, route it to the sub-agent
-      // slot. Otherwise, fall through to the regular tool-call store.
-      patchAgent(agent.id, (cur) => {
-        const subs = Array.isArray(cur.subAgents) ? cur.subAgents : [];
-        const subIdx = subs.findIndex(s => s.id === id);
-        const isSubKind = isSubAgentCall(u);
-        if (subIdx >= 0 || isSubKind) {
-          if (subIdx < 0) {
-            // Update arrived for an Agent-kind id we hadn't seen as a
-            // tool_call open. Materialize the entry now.
-            const prompt = (u.rawInput && (u.rawInput.prompt || u.rawInput.task || u.rawInput.input)) || null;
-            const newSub = {
-              id,
-              kind: u.kind || '',
-              label: pickSubAgentLabel(u),
-              parentToolCallId: id,
-              status,
-              prompt,
-              response: u.content ? extractToolContent(u.content) : [],
-              toolCalls: [],
-              rawInput: u.rawInput || null,
-              startedAt: Date.now(),
-              endedAt: done ? Date.now() : null,
-              _turnSpawn: cur.turn || 1,
-            };
-            return { ...cur, subAgents: subs.concat([newSub]), lastActivityAt: Date.now() };
-          }
-          const prev = subs[subIdx];
-          const newContent = u.content
-            ? mergeToolContent(prev.response, extractToolContent(u.content))
-            : prev.response;
-          const ms = (cur.milestones || []).slice();
-          if (done && !prev.endedAt) {
-            ms.push({
-              kind: status === 'Failed' ? 'sub-agent-fail' : 'sub-agent-end',
-              icon: 'S',
-              label: `sub-agent ${String(status).toLowerCase()}: ${truncCmd(prev.label)}`,
-              t: Date.now(),
-            });
-            if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
-          }
-          const next = {
-            ...prev,
-            kind: u.kind || prev.kind,
-            label: pickSubAgentLabel(u) || prev.label,
-            status,
-            rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
-            response: newContent,
-            endedAt: done ? (prev.endedAt || Date.now()) : prev.endedAt,
-          };
-          const nextSubs = subs.slice();
-          nextSubs[subIdx] = next;
-          return { ...cur, subAgents: nextSubs, milestones: ms, lastActivityAt: Date.now() };
-        }
-
-        // Regular tool-call update path.
-        const prev = cur.calls[id] || {
-          id,
-          kind: u.kind || '',
-          label: pickToolLabel(u),
-          status: 'Pending',
-          rawInput: null,
-          rawOutput: null,
-          content: [],
-          locations: [],
-          startedAt: Date.now(),
-          endedAt: null,
-        };
-        const nextContent = u.content
-          ? mergeToolContent(prev.content, extractToolContent(u.content))
-          : prev.content;
-        const next = {
-          ...prev,
-          kind: u.kind || prev.kind,
-          label: pickToolLabel(u) || prev.label,
-          status,
-          rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
-          rawOutput: (u.rawOutput != null) ? u.rawOutput : prev.rawOutput,
-          content: nextContent,
-          locations: Array.isArray(u.locations) && u.locations.length ? u.locations.slice() : prev.locations,
-          endedAt: done ? (prev.endedAt || Date.now()) : prev.endedAt,
-        };
-        const calls = { ...cur.calls, [id]: next };
-        return { ...cur, inFlight: countActive(calls), calls, lastActivityAt: Date.now() };
-      });
-    });
-
-    es.addEventListener('agent_message_chunk', (ev) => {
-      const data = safeParse(ev.data);
-      if (!data) return;
-      bumpTokens(data);
-      patchAgent(agent.id, (cur) => ({ ...cur, status: cur.status === 'errored' ? cur.status : 'running', lastActivityAt: Date.now() }));
-    });
-
-    es.addEventListener('agent_thought_chunk', (ev) => {
-      const data = safeParse(ev.data);
-      if (!data) return;
-      bumpTokens(data);
-    });
-
-    es.addEventListener('user_message_chunk', (ev) => {
-      const data = safeParse(ev.data);
-      if (!data) return;
-      patchAgent(agent.id, (cur) => ({ ...cur, lastUserAt: Date.now(), lastActivityAt: Date.now() }));
-    });
-
-    es.addEventListener('prompt_complete', (ev) => {
-      const data = safeParse(ev.data);
-      bumpTokens(data || {});
-      patchAgent(agent.id, (cur) => {
-        // Open the next turn slot for a milestone on the next tool_call.
-        const turn = cur.turn || 0;
-        const ms = (cur.milestones || []).slice();
-        if (turn > 0) {
-          ms.push({ kind: 'turn-end', icon: 'D', label: `turn ${turn} done`, t: Date.now() });
-          if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
-        }
-        return { ...cur, status: 'idle', milestones: ms, _turnHasMilestone: false, lastActivityAt: Date.now() };
-      });
-    });
-
-    // Grok-specific bg task lifecycle.
-    const onBgStart = (ev) => {
-      const data = safeParse(ev.data);
-      const u = (data && data.update) || (data && data.params && data.params.update) || data;
-      if (!u) return;
-      const cmd = u.command || u.cmd || '';
-      pushMilestone(agent.id, { kind: 'bg-start', icon: 'U', label: `started ${truncCmd(cmd)}`, t: Date.now() });
-    };
-    const onBgEnd = (ev) => {
-      const data = safeParse(ev.data);
-      const u = (data && data.update) || (data && data.params && data.params.update) || data;
-      if (!u) return;
-      const snap = u.task_snapshot || {};
-      const cmd = snap.command || u.command || '';
-      pushMilestone(agent.id, { kind: 'bg-end', icon: 'V', label: `finished ${truncCmd(cmd)}`, t: Date.now() });
-    };
-    es.addEventListener('task_backgrounded', onBgStart);
-    es.addEventListener('x.ai/task_backgrounded', onBgStart);
-    es.addEventListener('task_completed', onBgEnd);
-    es.addEventListener('x.ai/task_completed', onBgEnd);
+    es.addEventListener('agent_status', live('agent_status'));
+    es.addEventListener('tool_call', live('tool_call'));
+    es.addEventListener('tool_call_update', live('tool_call_update'));
+    es.addEventListener('agent_message_chunk', live('agent_message_chunk'));
+    es.addEventListener('agent_thought_chunk', live('agent_thought_chunk'));
+    es.addEventListener('user_message_chunk', live('user_message_chunk'));
+    es.addEventListener('prompt_complete', live('prompt_complete'));
+    es.addEventListener('task_backgrounded', live('task_backgrounded'));
+    es.addEventListener('x.ai/task_backgrounded', live('x.ai/task_backgrounded'));
+    es.addEventListener('task_completed', live('task_completed'));
+    es.addEventListener('x.ai/task_completed', live('x.ai/task_completed'));
 
     es.addEventListener('error', () => {
       // EventSource will reconnect on its own; flag the card meanwhile so
       // the user sees something is off.
       patchAgent(agent.id, (cur) => ({ ...cur, status: cur.status === 'running' ? 'errored' : cur.status }));
     });
-  }, [patchAgent, pushMilestone]);
+  }, [patchAgent, applyAgentEvent, replayHistoryFor]);
 
   const closeStreamFor = useCallback((id) => {
     const es = streamsRef.current.get(id);
@@ -1400,7 +1446,12 @@ function FlowInner({ filterIds = null }) {
 }
 
 const TOKEN_HISTORY_KEY = (id) => `grok-remote.flowTokens.${id}`;
-const TOKEN_HISTORY_MAX = 60;
+// Cap kept generous so the sparkline / stats chart can show a meaningful
+// history curve after replaying ~5000 events on page reload.
+const TOKEN_HISTORY_MAX = 200;
+// Cap on how many history events we replay on first open. Keeps reload
+// time low for very long sessions while still covering all realistic cases.
+const HISTORY_REPLAY_MAX = 5000;
 
 function loadTokenHistory(id) {
   try {
