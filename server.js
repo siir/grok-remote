@@ -670,62 +670,26 @@ function handleGlobalBgTerminals(req, res) {
   let runningTotal = 0;
   for (const rec of manager.list()) {
     const a = manager.getRaw(rec.id);
-    const terminals = [];
-
-    // ACP-standard terminals (server-host owned).
-    const host = a && a.client && a.client.terminalHost;
-    if (host && host._terminals) {
-      for (const t of host._terminals.values()) {
-        terminals.push({
-          id: t.id,
-          source: 'acp',
-          command: t.command,
-          cwd: t.cwd,
-          exited: !!t.exited,
-          exitStatus: t.exitStatus || null,
-          bytes: t.buffer ? t.buffer.length : 0,
-          truncated: !!t.truncated,
-        });
-        if (!t.exited) runningTotal++;
-      }
-    }
-
-    // grok-specific backgrounded tasks (agent-owned shells we observe).
-    if (a && a.bgTasks && a.bgTasks.size) {
-      for (const t of a.bgTasks.values()) {
-        const exitStatus = (t.exit_code != null || t.signal)
-          ? { exitCode: t.exit_code, signal: t.signal }
-          : null;
-        terminals.push({
-          id: t.id,
-          source: 'grok',
-          command: t.command,
-          cwd: t.cwd,
-          outputFile: t.output_file || null,
-          exited: !!t.completed,
-          exitStatus,
-          startedAt: t.startedAt,
-          endedAt: t.endedAt || null,
-        });
-        if (!t.completed) runningTotal++;
-      }
-    }
-
-    if (terminals.length) {
-      out.push({ agentId: rec.id, agentName: rec.name || rec.id, terminals });
+    const merged = mergeBgSources(a);
+    for (const t of merged) if (!t.exited) runningTotal++;
+    if (merged.length) {
+      out.push({ agentId: rec.id, agentName: rec.name || rec.id, terminals: merged });
     }
   }
   return sendJson(res, 200, { ok: true, runningCount: runningTotal, agents: out });
 }
 
-function handleTerminalList(req, res, rec) {
-  const out = [];
-  const a = manager.getRaw(rec.id);
-  // ACP-standard terminals.
+// Merge ACP terminal host entries with grok bgTasks for a single agent.
+// The agent uses both paths for the same physical process (it calls our
+// ACP terminal/create which assigns the id, then emits task_backgrounded
+// with the same id). Dedup by id and merge fields so each shell shows up
+// once per agent. Sort newest-first by start time.
+function mergeBgSources(a) {
+  const byId = new Map();
   const host = a && a.client && a.client.terminalHost;
   if (host && host._terminals) {
     for (const t of host._terminals.values()) {
-      out.push({
+      byId.set(t.id, {
         id: t.id,
         source: 'acp',
         command: t.command,
@@ -734,28 +698,53 @@ function handleTerminalList(req, res, rec) {
         exitStatus: t.exitStatus || null,
         bytes: t.buffer ? t.buffer.length : 0,
         truncated: !!t.truncated,
+        outputFile: null,
+        startedAt: null,
+        endedAt: null,
       });
     }
   }
-  // grok-specific backgrounded tasks (npm run dev style).
   if (a && a.bgTasks && a.bgTasks.size) {
     for (const t of a.bgTasks.values()) {
-      const exitStatus = (t.exit_code != null || t.signal)
-        ? { exitCode: t.exit_code, signal: t.signal } : null;
-      out.push({
-        id: t.id,
-        source: 'grok',
-        command: t.command,
-        cwd: t.cwd,
-        outputFile: t.output_file || null,
-        exited: !!t.completed,
-        exitStatus,
-        startedAt: t.startedAt,
-        endedAt: t.endedAt || null,
-      });
+      const grokStatus = (t.exit_code != null || t.signal)
+        ? { exitCode: t.exit_code, signal: t.signal }
+        : null;
+      const existing = byId.get(t.id);
+      if (existing) {
+        // Same physical process. Prefer the agent's unwrapped command for
+        // readability ("npm run dev" vs "/bin/bash -lc 'npm run dev'").
+        existing.source = 'merged';
+        existing.command = t.command || existing.command;
+        existing.cwd = t.cwd || existing.cwd;
+        existing.outputFile = t.output_file || existing.outputFile;
+        existing.startedAt = t.startedAt || existing.startedAt;
+        existing.endedAt = t.endedAt || existing.endedAt;
+        // If either source says exited, treat as exited. Prefer ACP exit
+        // status when present since it has real OS exitCode/signal data.
+        if (t.completed && !existing.exited) existing.exited = true;
+        if (!existing.exitStatus && grokStatus) existing.exitStatus = grokStatus;
+      } else {
+        byId.set(t.id, {
+          id: t.id,
+          source: 'grok',
+          command: t.command,
+          cwd: t.cwd,
+          outputFile: t.output_file || null,
+          exited: !!t.completed,
+          exitStatus: grokStatus,
+          startedAt: t.startedAt,
+          endedAt: t.endedAt || null,
+        });
+      }
     }
   }
-  return sendJson(res, 200, { ok: true, terminals: out });
+  // Sort newest first.
+  return [...byId.values()].sort((x, y) => (y.startedAt || 0) - (x.startedAt || 0));
+}
+
+function handleTerminalList(req, res, rec) {
+  const a = manager.getRaw(rec.id);
+  return sendJson(res, 200, { ok: true, terminals: mergeBgSources(a) });
 }
 
 function handleTerminalRead(req, res, rec, tid) {
