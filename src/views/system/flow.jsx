@@ -210,11 +210,12 @@ const GROUP_CHILD_ROW = 42;
 const GROUP_CHILD_ROW_OPEN = 280;
 
 // Milestone strip layout. Time-axis scaling was replaced by index-based
-// placement (see flow layout pass). A milestone card is ~200px wide; the
-// step gives breathing room without pushing far-future events offscreen.
-// The 2-row y-stagger handles bursts where 3+ events land in <1s.
-const MILESTONE_STEP_X = 150;
-const MILESTONE_ROW_DY = 28;
+// placement (see flow layout pass). A milestone card is 200px wide; the
+// step must be >= that plus a small gap so adjacent nodes never overlap.
+// The 2-row y-stagger gives extra breathing room when many events land
+// in a short burst.
+const MILESTONE_STEP_X = 220;
+const MILESTONE_ROW_DY = 32;
 
 // Backoff schedule for sub-agent child trace retries. Used when the session
 // dir hasn't been flushed to disk yet (brand-new bg sub-agents). The

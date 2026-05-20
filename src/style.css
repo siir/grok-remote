@@ -5844,8 +5844,7 @@ body::before {
 /* Milestone node along the top of the canvas. */
 .flow-milestone-node {
   position: relative;
-  min-width: 90px;
-  max-width: 200px;
+  width: 200px;
   padding: 3px 8px 4px;
   background: var(--panel);
   border: 1px solid var(--border-2);
@@ -5853,6 +5852,7 @@ body::before {
   font-size: 10px;
   color: var(--text);
   user-select: none;
+  overflow: hidden;
 }
 .flow-milestone-node--turn      { border-color: var(--blue);  color: var(--blue); }
 .flow-milestone-node--turn-end  { border-color: var(--blue);  color: var(--muted); }
@@ -5875,6 +5875,10 @@ body::before {
   font-family: var(--mono);
   font-size: 10px;
   vertical-align: middle;
+  max-width: calc(100% - 20px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .flow-milestone-node__time {
   display: block;
