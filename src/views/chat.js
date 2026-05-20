@@ -1046,15 +1046,20 @@ export class ChatView {
       if (!all && total > returned && returned > 0) {
         this.streamEl.appendChild(this._buildLoadEarlierBanner(total - returned));
       }
-      for (const ev of events) {
-        const name = ev.event || ev.type || ev.name;
-        const data = ev.data || ev.payload || ev;
-        if (!name) continue;
-        // Stash event timestamp so bubble renders pick up the real time
-        // rather than "now" during a history replay.
-        const t = Date.parse(ev.at);
-        if (Number.isFinite(t)) this._lastEventTs = t;
-        this.handleEvent(name, data, { fromHistory: true });
+      this._isReplaying = true;
+      try {
+        for (const ev of events) {
+          const name = ev.event || ev.type || ev.name;
+          const data = ev.data || ev.payload || ev;
+          if (!name) continue;
+          // Stash event timestamp so bubble renders pick up the real time
+          // rather than "now" during a history replay.
+          const t = Date.parse(ev.at);
+          if (Number.isFinite(t)) this._lastEventTs = t;
+          this.handleEvent(name, data, { fromHistory: true });
+        }
+      } finally {
+        this._isReplaying = false;
       }
       this._lastEventTs = null;
       // History replay may end with an unterminated turn (interrupted session,
@@ -1140,7 +1145,11 @@ export class ChatView {
     this._cancelChatIntro();
     const ts = (opts && opts.ts) || Date.now();
     const userBubble = renderUserBubble(userText, ts);
-    const root = el('div', { class: 'turn' }, userBubble);
+    // Only animate fresh insertions, never historical replay (that would
+    // produce a chaotic shimmer across all replayed turns).
+    const animate = !this._isReplaying && !(opts && opts.fromHistory);
+    const classes = animate ? 'turn turn--enter' : 'turn';
+    const root = el('div', { class: classes }, userBubble);
     this.streamEl.appendChild(root);
     const turn = {
       user:      userBubble,
@@ -1176,31 +1185,120 @@ export class ChatView {
     // Force-scroll on explicit actions (sending a message, initial load).
     const force = !!(opts && opts.force);
     if (!force && this._autoScroll === false) return;
-    // Coalesce: scrollHeight access forces synchronous layout. During
-    // streaming many handlers call this back-to-back; rAF batches them
-    // to one layout per frame.
-    if (this._scrollRaf) return;
-    this._scrollRaf = requestAnimationFrame(() => {
-      this._scrollRaf = 0;
-      const doScroll = () => {
-        // content-visibility: auto on .turn makes scrollHeight unreliable
-        // until the browser has actually rendered the off-screen turns. Use
-        // scrollIntoView on the last child when forcing (initial load /
-        // explicit user actions); it triggers the lazy layout for any
-        // sibling on the way and lands accurately at the very bottom.
-        const last = this.streamEl.lastElementChild;
-        if (force && last && typeof last.scrollIntoView === 'function') {
-          try { last.scrollIntoView({ block: 'end' }); return; } catch { /* fall through */ }
-        }
-        this.streamEl.scrollTop = this.streamEl.scrollHeight;
-      };
-      doScroll();
-      if (force) {
+
+    // Force path: snap to bottom (preserves content-visibility scrollIntoView
+    // fallback). Used for initial history load and explicit user actions like
+    // the jump-to-latest button.
+    if (force) {
+      if (this._scrollRaf) return;
+      this._scrollRaf = requestAnimationFrame(() => {
+        this._scrollRaf = 0;
+        const doScroll = () => {
+          // content-visibility: auto on .turn makes scrollHeight unreliable
+          // until the browser has actually rendered the off-screen turns. Use
+          // scrollIntoView on the last child when forcing; it triggers the
+          // lazy layout for any sibling on the way and lands accurately at
+          // the very bottom.
+          const last = this.streamEl.lastElementChild;
+          if (last && typeof last.scrollIntoView === 'function') {
+            try { last.scrollIntoView({ block: 'end' }); return; } catch { /* fall through */ }
+          }
+          this.streamEl.scrollTop = this.streamEl.scrollHeight;
+        };
+        doScroll();
         // Re-run once more after layout has settled so we land on the true
         // bottom even after content-visibility realizes the placeholders.
-        requestAnimationFrame(doScroll);
+        requestAnimationFrame(() => {
+          doScroll();
+          // Reset the eased target so it doesn't immediately yank us back
+          // up if the next streaming chunk references a stale target.
+          this._easedScrollTarget = this.streamEl.scrollTop;
+        });
+      });
+      return;
+    }
+
+    // Streaming path: eased follow toward the current bottom. Each call just
+    // re-arms the target; the single rAF loop in _easedScrollTick handles the
+    // animation and self-cancels when it lands within 1px of the target.
+    this._scheduleEasedScroll();
+  }
+
+  // Mark the stream as wanting to chase the bottom. Starts the rAF loop if
+  // not already running. Safe to call repeatedly per chunk arrival.
+  _scheduleEasedScroll() {
+    this._easedScrollPending = true;
+    if (typeof document !== 'undefined' && document.hidden) {
+      // rAF is throttled when the tab is hidden. Snap instead so when the
+      // user comes back they're already at the bottom.
+      this.streamEl.scrollTop = this.streamEl.scrollHeight;
+      this._easedScrollPending = false;
+      this._easedScrollTarget = this.streamEl.scrollTop;
+      return;
+    }
+    if (this._easedScrollRaf) return;
+    const tick = () => {
+      this._easedScrollRaf = 0;
+      // Bail if the user scrolled away or the view got torn down between
+      // frames.
+      if (!this.streamEl || !this.streamEl.isConnected) return;
+      if (this._autoScroll === false) {
+        this._easedScrollPending = false;
+        return;
       }
-    });
+      const el = this.streamEl;
+      const target = Math.max(0, el.scrollHeight - el.clientHeight);
+      this._easedScrollTarget = target;
+      const current = el.scrollTop;
+      const delta = target - current;
+      if (Math.abs(delta) <= 1) {
+        // Land exactly and stop the loop.
+        el.scrollTop = target;
+        this._easedScrollPending = false;
+        return;
+      }
+      // Ease ~0.22 per frame. At 60fps a 200px gap closes in ~10 frames.
+      el.scrollTop = current + delta * 0.22;
+      this._easedScrollRaf = requestAnimationFrame(tick);
+    };
+    this._easedScrollRaf = requestAnimationFrame(tick);
+  }
+
+  // Eased follow for the tools column. Mirrors scrollToBottom() above but
+  // for this.toolsStreamEl. Cheaper because the tools column doesn't use
+  // content-visibility so scrollHeight is always accurate.
+  _scrollToolsToBottom(opts) {
+    if (!this.toolsStreamEl) return;
+    const force = !!(opts && opts.force);
+    if (!force && this._autoScrollTools === false) return;
+    if (force) {
+      this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
+      this._easedToolsTarget = this.toolsStreamEl.scrollTop;
+      return;
+    }
+    if (typeof document !== 'undefined' && document.hidden) {
+      this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
+      this._easedToolsTarget = this.toolsStreamEl.scrollTop;
+      return;
+    }
+    if (this._easedToolsRaf) return;
+    const tick = () => {
+      this._easedToolsRaf = 0;
+      if (!this.toolsStreamEl || !this.toolsStreamEl.isConnected) return;
+      if (this._autoScrollTools === false) return;
+      const el = this.toolsStreamEl;
+      const target = Math.max(0, el.scrollHeight - el.clientHeight);
+      this._easedToolsTarget = target;
+      const current = el.scrollTop;
+      const delta = target - current;
+      if (Math.abs(delta) <= 1) {
+        el.scrollTop = target;
+        return;
+      }
+      el.scrollTop = current + delta * 0.22;
+      this._easedToolsRaf = requestAnimationFrame(tick);
+    };
+    this._easedToolsRaf = requestAnimationFrame(tick);
   }
 
   // Build the static header (title + collapse toggle) for the tools column.
@@ -1290,7 +1388,12 @@ export class ChatView {
 
   _destroyChatSplit() {
     if (this._chatSplit) {
-      try { this._chatSplit.destroy(true, true); } catch { /* ignore */ }
+      // No args: Split.js clears its inline flex-basis from both panes
+      // (and removes the gutter). Preserving inline styles would leave
+      // the chat-stream stuck at its dragged width even after the
+      // tools column collapses, which fights the CSS rule that
+      // reclaims the freed space.
+      try { this._chatSplit.destroy(); } catch { /* ignore */ }
       this._chatSplit = null;
     }
   }
@@ -1336,6 +1439,7 @@ export class ChatView {
 
   _initAutoScroll() {
     this._autoScroll = true;
+    this._autoScrollTools = true;
     const THRESHOLD = 60; // px from bottom counts as "at bottom"
     // Jump-to-latest button, hidden by default. Lives inside the stream so
     // it shows up above the composer without restructuring the layout.
@@ -1349,7 +1453,7 @@ export class ChatView {
         this._jumpToLatestBtn.hidden = true;
       },
     }, '↓ jump to latest');
-    // Append once the user mounts — defer to mount() so the button lives
+    // Append once the user mounts. Defer to a microtask so the button lives
     // inside the conversation pane, not the stream itself.
     requestAnimationFrame(() => {
       const pane = this.streamEl.parentElement;
@@ -1357,6 +1461,12 @@ export class ChatView {
         pane.appendChild(this._jumpToLatestBtn);
       }
     });
+    // Track user-initiated scroll. We need to distinguish programmatic
+    // eased-scroll writes from real user input; a manual flag set just
+    // before each programmatic write would be racy across rAF boundaries,
+    // so instead we compare against the most-recent eased target. If the
+    // user is meaningfully off-target (more than the threshold), treat it
+    // as a manual scroll-away.
     const onScroll = () => {
       const el = this.streamEl;
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -1367,11 +1477,58 @@ export class ChatView {
       } else if (!atBottom && this._autoScroll) {
         this._autoScroll = false;
         this._jumpToLatestBtn.hidden = false;
+        // Stop chasing while the user is reading further up.
+        if (this._easedScrollRaf) {
+          cancelAnimationFrame(this._easedScrollRaf);
+          this._easedScrollRaf = 0;
+        }
       }
     };
     this.streamEl.addEventListener('scroll', onScroll, { passive: true });
+
+    // Same listener for the tools column. No jump-to-latest button there;
+    // we just pause the eased follow when the user scrolls up.
+    const onToolsScroll = () => {
+      const el = this.toolsStreamEl;
+      if (!el) return;
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const atBottom = dist <= THRESHOLD;
+      if (atBottom && !this._autoScrollTools) {
+        this._autoScrollTools = true;
+      } else if (!atBottom && this._autoScrollTools) {
+        this._autoScrollTools = false;
+        if (this._easedToolsRaf) {
+          cancelAnimationFrame(this._easedToolsRaf);
+          this._easedToolsRaf = 0;
+        }
+      }
+    };
+    if (this.toolsStreamEl) {
+      this.toolsStreamEl.addEventListener('scroll', onToolsScroll, { passive: true });
+    }
+
+    // rAF is throttled while the tab is hidden, so the eased loop stalls.
+    // When the user comes back, snap both streams to their targets so they
+    // start aligned for any further easing.
+    const onVis = () => {
+      if (document.hidden) return;
+      if (this._autoScroll !== false) {
+        this.streamEl.scrollTop = this.streamEl.scrollHeight;
+        this._easedScrollTarget = this.streamEl.scrollTop;
+      }
+      if (this._autoScrollTools !== false && this.toolsStreamEl) {
+        this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
+        this._easedToolsTarget = this.toolsStreamEl.scrollTop;
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+
     this._detachAutoScroll = () => {
       this.streamEl.removeEventListener('scroll', onScroll);
+      if (this.toolsStreamEl) this.toolsStreamEl.removeEventListener('scroll', onToolsScroll);
+      document.removeEventListener('visibilitychange', onVis);
+      if (this._easedScrollRaf) { cancelAnimationFrame(this._easedScrollRaf); this._easedScrollRaf = 0; }
+      if (this._easedToolsRaf)  { cancelAnimationFrame(this._easedToolsRaf);  this._easedToolsRaf  = 0; }
     };
   }
 
@@ -1687,9 +1844,9 @@ export class ChatView {
   handleEvent(name, payload, opts) {
     const data = unwrap(payload);
     switch (name) {
-      case 'user_message':              return this.onUserMessage(data);
-      case 'agent_message_chunk':       return this.onMessageChunk(data);
-      case 'agent_thought_chunk':       return this.onThoughtChunk(data);
+      case 'user_message':              return this.onUserMessage(data, opts);
+      case 'agent_message_chunk':       return this.onMessageChunk(data, opts);
+      case 'agent_thought_chunk':       return this.onThoughtChunk(data, opts);
       case 'tool_call':                 return this.onToolCall(data, opts);
       case 'tool_call_update':          return this.onToolCallUpdate(data, opts);
       case 'tool_call_delta_chunk':     return this.onToolCallDelta(data);
@@ -1704,7 +1861,7 @@ export class ChatView {
     }
   }
 
-  onUserMessage(data) {
+  onUserMessage(data, opts) {
     const text = (data && typeof data.text === 'string') ? data.text : extractText(data);
     if (!text) return;
     // Dedup: the live send() path calls startTurn(text) BEFORE the server
@@ -1718,22 +1875,28 @@ export class ChatView {
     ) {
       return;
     }
-    this.startTurn(text, { ts: this._lastEventTs || Date.now() });
+    this.startTurn(text, { ts: this._lastEventTs || Date.now(), fromHistory: !!(opts && opts.fromHistory) });
   }
 
-  onMessageChunk(data) {
+  onMessageChunk(data, opts) {
     const text = extractText(data);
     if (text == null) return;
     const turn = this.ensureTurn();
-    if (!turn.assistant) {
+    const fresh = !turn.assistant;
+    if (fresh) {
       turn.assistant = renderAssistantBubble(this._lastEventTs || Date.now());
+      // Mark the assistant bubble for entrance animation only on first
+      // insertion in the live path (skip during history replay).
+      if (!this._isReplaying && !(opts && opts.fromHistory)) {
+        turn.assistant.node.classList.add('msg--enter');
+      }
       turn.root.appendChild(turn.assistant.node);
     }
     turn.assistant.append(text);
     this.scrollToBottom();
   }
 
-  onThoughtChunk(data) {
+  onThoughtChunk(data, opts) {
     const text = extractText(data);
     if (text == null) return;
     const turn = this.ensureTurn();
@@ -1749,10 +1912,13 @@ export class ChatView {
     const turn = this.ensureTurn();
     const card = renderToolCard(data);
     turn.tools.push({ id: data.toolCallId, card });
+    const live = !this._isReplaying && !(opts && opts.fromHistory);
+    if (live) card.node.classList.add('tool-pill--enter');
     this._ensureToolsGroup(turn).appendChild(card.node);
+    this._scrollToolsToBottom();
     // Add to the in-flight strip unless this came from history replay
     // (those calls are already terminal and would just flash).
-    if (!(opts && opts.fromHistory)) {
+    if (live) {
       this._addInFlight(data, card.node);
     }
     this.scrollToBottom();
@@ -1768,8 +1934,11 @@ export class ChatView {
       // server might emit an update before we ever saw a tool_call. create one.
       const card = renderToolCard(data);
       turn.tools.push({ id: data.toolCallId, card });
+      const live = !this._isReplaying && !(opts && opts.fromHistory);
+      if (live) card.node.classList.add('tool-pill--enter');
       this._ensureToolsGroup(turn).appendChild(card.node);
-      if (!(opts && opts.fromHistory)) this._addInFlight(data, card.node);
+      this._scrollToolsToBottom();
+      if (live) this._addInFlight(data, card.node);
       entry = turn.tools[turn.tools.length - 1];
     }
     // Always reconcile the strip against the actual pill statuses. This is
@@ -1927,7 +2096,7 @@ export class ChatView {
     this.palette.classList.add('hidden');
 
     // Start a turn locally and let the SSE stream fill in the rest.
-    // The user just sent a message — they want to see it land, so re-enable
+    // The user just sent a message; they want to see it land, so re-enable
     // auto-scroll regardless of where they were in the history.
     this._autoScroll = true;
     if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = true;

@@ -474,7 +474,11 @@ function installOuterSplit(splitHost, sidebarPane, mainPane) {
 
   function destroySplit() {
     if (split) {
-      try { split.destroy(true, true); } catch { /* ignore */ }
+      // Pass no args so Split.js removes its inline flex-basis from both
+      // panes (and removes the gutter). Otherwise the inline style locks
+      // .main-pane-wrap to ~78% width even after the sidebar collapses,
+      // which is exactly the bug that left the chat content blank.
+      try { split.destroy(); } catch { /* ignore */ }
       split = null;
     }
   }

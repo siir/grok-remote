@@ -1436,6 +1436,38 @@ body::before {
 }
 .msg--assistant.msg--done .msg-body { border-color: var(--border-2); }
 
+/* Entrance animations for freshly inserted turns and tool pills.
+   Applied via the .turn--enter / .tool-pill--enter classes so historical
+   replay (refreshHistory) can skip them and avoid a chaotic shimmer. */
+@keyframes turn-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes user-bubble-enter {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes assistant-bubble-enter {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes tool-pill-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.turn--enter { animation: turn-enter 180ms ease-out both; }
+.turn--enter .msg--user      { animation: user-bubble-enter 180ms ease-out both; }
+.turn--enter .msg--assistant { animation: assistant-bubble-enter 180ms ease-out both; }
+.msg--assistant.msg--enter   { animation: assistant-bubble-enter 180ms ease-out both; }
+.tool-pill--enter { animation: tool-pill-enter 160ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .turn--enter,
+  .turn--enter .msg--user,
+  .turn--enter .msg--assistant,
+  .msg--assistant.msg--enter,
+  .tool-pill--enter { animation: none; }
+}
+
 @media (max-width: 720px) {
   .msg-body { max-width: 100%; padding: 10px 12px; }
 }
@@ -1507,7 +1539,7 @@ body::before {
 }
 
 /* Tool calls as inline pills: compact one-line header, click to expand.
-   The whole thing flows inline with the rest of the turn — no card chrome. */
+   The whole thing flows inline with the rest of the turn (no card chrome). */
 .tool-pill {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -1933,7 +1965,7 @@ body::before {
 
 /* ── responsive ──────────────────────────────────────── */
 /* (mobile dashboard layout overrides live with the .left-rail responsive
-   block lower down — keep the breakpoints there together.) */
+   block lower down; the breakpoints stay together there.) */
 
 /* ===== files-tab ===== */
 .pane--files {
@@ -2748,7 +2780,7 @@ body::before {
 }
 .drawer-backdrop[hidden] { display: none; }
 
-/* install banner — palette-matched, top on desktop. */
+/* install banner (palette-matched, top on desktop). */
 /* Install banner: an honest alert, not a chip blended into the chrome.
    Distinct teal-tinted background + thick left accent + stronger shadow so
    the user knows it's an actionable message. */
