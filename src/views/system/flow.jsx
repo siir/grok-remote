@@ -47,6 +47,20 @@ const MILESTONE_CAP = 40;
 // previous call's end (or start, if it has no end yet).
 const GROUP_GAP_MS = 3000;
 
+// A tool_call whose kind matches this is treated as a sub-agent invocation
+// rather than a regular tool. Matches "Agent", "Agent(explore)",
+// "agent(planner)", etc.
+const SUB_AGENT_KIND_RE = /^agent(?:\(.*\))?$/i;
+
+// Sub-agent layout: cards hang off the LEFT side of the main agent, stacked
+// vertically using the same AGENT_GAP-style cadence so future deep nesting
+// is easy to extend.
+const LAYOUT = {
+  AGENT_GAP: 320,    // mirror AGENT_ROW_HEIGHT cadence between siblings
+  SUB_AGENT_X: -260, // 240px wide card + 20px gap from parent's left edge
+  SUB_AGENT_GAP: 140,
+};
+
 const STATUS_RANK = {
   running: 0, idle: 1, errored: 2, disconnected: 3, exited: 3, killed: 3, unknown: 4,
 };
@@ -64,9 +78,10 @@ function AgentNode({ data }) {
   const hist = Array.isArray(data.tokensHistory) ? data.tokensHistory : [];
   const sparkPath = (hist.length >= 2) ? buildSparkPath(hist, 120, 16) : null;
   return (
-    <div className={`flow-agent-node flow-agent-node--${status}`}>
+    <div className={`flow-agent-node flow-agent-node--${status}`} data-depth={data.depth || 0}>
       <Handle type="source" position={Position.Right} className="flow-handle" />
       <Handle type="target" position={Position.Right} className="flow-handle" />
+      <Handle type="source" id="sub" position={Position.Left} className="flow-handle" />
       <Handle type="source" id="bg" position={Position.Bottom} className="flow-handle" />
       <div className="flow-agent-node__row">
         <span className={`flow-agent-node__dot flow-agent-node__dot--${status}`} />
@@ -267,6 +282,72 @@ function MilestoneNode({ data }) {
   );
 }
 
+// Smaller card hanging off the LEFT of the main agent. Visualizes a
+// sub-agent (grok's built-in Agent tool, e.g. Agent(explore)). Connection:
+// edge from parent's left handle to this node's right handle.
+function SubAgentNode({ data }) {
+  const status = (data.status || 'pending').toLowerCase();
+  const [open, setOpen] = useState(false);
+  const dur = (data.endedAt && data.startedAt) ? (data.endedAt - data.startedAt) : null;
+  const liveDur = (!data.endedAt && data.startedAt) ? (Date.now() - data.startedAt) : null;
+  const showDur = dur != null ? fmtDuration(dur) : (liveDur != null ? `${fmtDuration(liveDur)}...` : '');
+  const promptText = typeof data.prompt === 'string'
+    ? data.prompt
+    : (data.prompt ? safeStringify(data.prompt) : '');
+  const responseText = Array.isArray(data.response)
+    ? data.response.map(c => c.text).join('\n').trim()
+    : (typeof data.response === 'string' ? data.response : '');
+
+  return (
+    <div
+      className={`flow-subagent-node flow-subagent-node--${status} ${open ? 'flow-subagent-node--open' : ''}`}
+      data-depth={data.depth || 1}
+    >
+      <Handle type="target" position={Position.Right} className="flow-handle" />
+      <Handle type="source" position={Position.Right} className="flow-handle" />
+      <div className="flow-subagent-node__crumb" title={`parent: ${data.parentName || ''}`}>
+        parent: <span className="flow-subagent-node__crumb-name">{data.parentName || 'agent'}</span>
+      </div>
+      <button
+        type="button"
+        className="flow-subagent-node__head"
+        onClick={() => setOpen(v => !v)}
+        title={data.label}
+      >
+        <span className="flow-subagent-node__pill">SUB-AGENT</span>
+        <span className="flow-subagent-node__label">{data.label || '(unnamed)'}</span>
+      </button>
+      <div className="flow-subagent-node__row">
+        <span className={`flow-subagent-node__status flow-subagent-node__status--${status}`}>
+          {data.status || 'pending'}
+        </span>
+        {showDur && <span className="flow-subagent-node__dur">{showDur}</span>}
+      </div>
+      {open && (
+        <div className="flow-subagent-node__body">
+          {promptText && (
+            <div className="flow-subagent-node__section">
+              <div className="flow-subagent-node__section-title">prompt</div>
+              <pre className="flow-subagent-node__pre">{promptText}</pre>
+            </div>
+          )}
+          {responseText && (
+            <div className="flow-subagent-node__section">
+              <div className="flow-subagent-node__section-title">response</div>
+              <pre className="flow-subagent-node__pre">{responseText}</pre>
+            </div>
+          )}
+          {!promptText && !responseText && (
+            <div className="flow-subagent-node__section flow-subagent-node__section--empty">
+              no payload yet.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function safeStringify(v) {
   if (v == null) return '';
   if (typeof v === 'string') return v;
@@ -279,6 +360,7 @@ const NODE_TYPES = {
   group: GroupNode,
   bgTask: BgTaskNode,
   milestone: MilestoneNode,
+  subAgent: SubAgentNode,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -495,6 +577,61 @@ function FlowInner({ filterIds = null }) {
       const label  = pickToolLabel(u);
       const status = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.status) || u.status || 'Pending';
       const startedAt = Date.now();
+
+      // Sub-agent invocations get peeled off into their own state slot so we
+      // can visualize the parent -> child hierarchy. Mirrors the regular
+      // tool_call plumbing.
+      if (SUB_AGENT_KIND_RE.test(kind)) {
+        const prompt = (u.rawInput && (u.rawInput.prompt || u.rawInput.task || u.rawInput.input)) || null;
+        patchAgent(agent.id, (cur) => {
+          const prevSubs = Array.isArray(cur.subAgents) ? cur.subAgents : [];
+          const turn = (cur.turn || 0) + (cur._turnHasMilestone ? 0 : 1);
+          const firstThisTurn = !prevSubs.some(s => s._turnSpawn === turn);
+          let subAgents;
+          if (prevSubs.some(s => s.id === id)) {
+            subAgents = prevSubs;
+          } else {
+            subAgents = prevSubs.concat([{
+              id,
+              kind,
+              label,
+              parentToolCallId: id,
+              status,
+              prompt,
+              response: [],
+              toolCalls: [],
+              rawInput: u.rawInput || null,
+              startedAt,
+              endedAt: null,
+              _turnSpawn: turn,
+            }]);
+          }
+          const ms = (cur.milestones || []).slice();
+          if (firstThisTurn) {
+            ms.push({ kind: 'sub-agent-spawn', icon: 'S', label: `turn ${turn} spawned sub-agent`, t: startedAt });
+          }
+          ms.push({ kind: 'sub-agent-start', icon: 'S', label: `sub-agent started: ${truncCmd(label)}`, t: startedAt });
+          if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
+          return {
+            ...cur,
+            status: 'running',
+            subAgents,
+            milestones: ms,
+            lastActivityAt: startedAt,
+          };
+        });
+        // Still bump the turn milestone like a regular tool call.
+        patchAgent(agent.id, (cur) => {
+          if (cur._turnHasMilestone) return cur;
+          const turn = (cur.turn || 0) + 1;
+          const ms = (cur.milestones || []).slice();
+          ms.push({ kind: 'turn', icon: 'T', label: `turn ${turn}`, t: startedAt });
+          if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
+          return { ...cur, turn, milestones: ms, _turnHasMilestone: true };
+        });
+        return;
+      }
+
       patchAgent(agent.id, (cur) => {
         const calls = { ...cur.calls, [id]: {
           id,
@@ -534,7 +671,64 @@ function FlowInner({ filterIds = null }) {
       const status  = (raw._meta && raw._meta.updateParams && raw._meta.updateParams.status)
                     || u.status || 'Running';
       const done    = (status === 'Completed' || status === 'Failed' || status === 'canceled');
+
+      // Single state mutation: if the id belongs to an existing sub-agent
+      // OR the update advertises an Agent kind, route it to the sub-agent
+      // slot. Otherwise, fall through to the regular tool-call store.
       patchAgent(agent.id, (cur) => {
+        const subs = Array.isArray(cur.subAgents) ? cur.subAgents : [];
+        const subIdx = subs.findIndex(s => s.id === id);
+        const isSubKind = SUB_AGENT_KIND_RE.test(u.kind || '');
+        if (subIdx >= 0 || isSubKind) {
+          if (subIdx < 0) {
+            // Update arrived for an Agent-kind id we hadn't seen as a
+            // tool_call open. Materialize the entry now.
+            const prompt = (u.rawInput && (u.rawInput.prompt || u.rawInput.task || u.rawInput.input)) || null;
+            const newSub = {
+              id,
+              kind: u.kind || '',
+              label: pickToolLabel(u),
+              parentToolCallId: id,
+              status,
+              prompt,
+              response: u.content ? extractToolContent(u.content) : [],
+              toolCalls: [],
+              rawInput: u.rawInput || null,
+              startedAt: Date.now(),
+              endedAt: done ? Date.now() : null,
+              _turnSpawn: cur.turn || 1,
+            };
+            return { ...cur, subAgents: subs.concat([newSub]), lastActivityAt: Date.now() };
+          }
+          const prev = subs[subIdx];
+          const newContent = u.content
+            ? mergeToolContent(prev.response, extractToolContent(u.content))
+            : prev.response;
+          const ms = (cur.milestones || []).slice();
+          if (done && !prev.endedAt) {
+            ms.push({
+              kind: status === 'Failed' ? 'sub-agent-fail' : 'sub-agent-end',
+              icon: 'S',
+              label: `sub-agent ${String(status).toLowerCase()}: ${truncCmd(prev.label)}`,
+              t: Date.now(),
+            });
+            if (ms.length > MILESTONE_CAP) ms.splice(0, ms.length - MILESTONE_CAP);
+          }
+          const next = {
+            ...prev,
+            kind: u.kind || prev.kind,
+            label: pickToolLabel(u) || prev.label,
+            status,
+            rawInput: (u.rawInput != null) ? u.rawInput : prev.rawInput,
+            response: newContent,
+            endedAt: done ? (prev.endedAt || Date.now()) : prev.endedAt,
+          };
+          const nextSubs = subs.slice();
+          nextSubs[subIdx] = next;
+          return { ...cur, subAgents: nextSubs, milestones: ms, lastActivityAt: Date.now() };
+        }
+
+        // Regular tool-call update path.
         const prev = cur.calls[id] || {
           id,
           kind: u.kind || '',
@@ -802,6 +996,7 @@ function FlowInner({ filterIds = null }) {
           inFlight: st.inFlight || 0,
           tokensHistory: Array.isArray(st.tokensHistory) ? st.tokensHistory : [],
           isFocus,
+          depth: 0,
         },
       };
     });
@@ -815,6 +1010,54 @@ function FlowInner({ filterIds = null }) {
     agentNodes.forEach((agentNode) => {
       const st = agentState[agentNode.data.agentId];
       if (!st) return;
+
+      // — Sub-agents (hang off the LEFT of the parent) —
+      if (Array.isArray(st.subAgents) && st.subAgents.length) {
+        const subs = st.subAgents
+          .slice()
+          .sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+        subs.forEach((sub, j) => {
+          const subId = `sub:${agentNode.data.agentId}:${sub.id}`;
+          const sx = agentNode.position.x + LAYOUT.SUB_AGENT_X;
+          const sy = agentNode.position.y + j * LAYOUT.SUB_AGENT_GAP;
+          const status = String(sub.status || 'pending').toLowerCase();
+          const running = !sub.endedAt && (status === 'pending' || status === 'running' || status === 'in_progress');
+          auxNodes.push({
+            id: subId,
+            type: 'subAgent',
+            position: { x: sx, y: sy },
+            draggable: false,
+            selectable: true,
+            data: {
+              id: sub.id,
+              label: sub.label,
+              kind: sub.kind,
+              status: sub.status,
+              prompt: sub.prompt,
+              response: sub.response,
+              startedAt: sub.startedAt,
+              endedAt: sub.endedAt,
+              parentName: agentNode.data.name,
+              depth: 1,
+            },
+          });
+          auxEdges.push({
+            id: `edge:${agentNode.id}->${subId}`,
+            source: agentNode.id,
+            sourceHandle: 'sub',
+            target: subId,
+            animated: running,
+            style: {
+              stroke: status === 'failed'
+                ? 'var(--red)'
+                : (running ? 'var(--blue)' : 'var(--dim)'),
+              strokeWidth: 1.4,
+              opacity: running ? 1 : 0.7,
+              strokeDasharray: running ? '0' : '4 3',
+            },
+          });
+        });
+      }
 
       // — Tool calls + grouping —
       if (st.calls && Object.keys(st.calls).length) {
@@ -1282,9 +1525,21 @@ function FlowStatsPanel({ agents, agentState, onClose, tick }) {
     let lastUserAt = 0;
     const perKind = new Map(); // kind -> { count, totalMs }
     const perTurn = new Map(); // turn -> count (approx; we share across agents)
+    const subAgentEntries = []; // flat list across all visible agents
+    let subAgentTotalMs = 0;
+    let subAgentTimed = 0;
 
     for (const a of agents) {
       const st = agentState[a.id] || {};
+      if (Array.isArray(st.subAgents)) {
+        for (const sa of st.subAgents) {
+          subAgentEntries.push({ ...sa, parentName: a.name || a.id.slice(0, 8) });
+          if (sa.startedAt && sa.endedAt) {
+            subAgentTotalMs += Math.max(0, sa.endedAt - sa.startedAt);
+            subAgentTimed += 1;
+          }
+        }
+      }
       if (Array.isArray(st.tokensHistory)) for (const p of st.tokensHistory) allHist.push(p);
       totalTokens += (typeof st.tokens === 'number' ? st.tokens : 0);
       totalTurns += (st.turn || 0);
@@ -1344,6 +1599,10 @@ function FlowStatsPanel({ agents, agentState, onClose, tick }) {
 
     const turns = [...perTurn.entries()].sort((a, b) => a[0] - b[0]);
 
+    subAgentEntries.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+    const lastSubAgent = subAgentEntries.length ? subAgentEntries[subAgentEntries.length - 1] : null;
+    const subAgentAvgMs = subAgentTimed ? Math.round(subAgentTotalMs / subAgentTimed) : 0;
+
     return {
       tokensHist: allHist,
       totalCalls,
@@ -1355,6 +1614,9 @@ function FlowStatsPanel({ agents, agentState, onClose, tick }) {
       lastUserAt,
       topKinds,
       perTurnBars: turns,
+      subAgentCount: subAgentEntries.length,
+      subAgentAvgMs,
+      lastSubAgent,
     };
   }, [agents, agentState]);
 
@@ -1439,9 +1701,39 @@ function FlowStatsPanel({ agents, agentState, onClose, tick }) {
         )}
       </section>
 
+      <section className="flow-stats__section">
+        <div className="flow-stats__section-title">sub-agents</div>
+        {stats.subAgentCount > 0 ? (
+          <>
+            <div className="flow-stats__row">
+              <span className="flow-stats__row-key">spawned</span>
+              <span className="flow-stats__row-val">{stats.subAgentCount}</span>
+            </div>
+            <div className="flow-stats__row">
+              <span className="flow-stats__row-key">avg time</span>
+              <span className="flow-stats__row-val">{stats.subAgentAvgMs ? fmtDuration(stats.subAgentAvgMs) : '--'}</span>
+            </div>
+            {stats.lastSubAgent && (
+              <div className="flow-stats__row">
+                <span className="flow-stats__row-key">most recent</span>
+                <span
+                  className="flow-stats__row-val flow-stats__row-val--blue"
+                  title={stats.lastSubAgent.label || ''}
+                >
+                  {truncCmd(stats.lastSubAgent.label || '(unnamed)')}
+                </span>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="flow-stats__empty">none yet.</div>
+        )}
+      </section>
+
       <section className="flow-stats__section flow-stats__section--counters">
         <Counter label="tool calls" value={stats.totalCalls} />
         <Counter label="turns"      value={stats.totalTurns} />
+        <Counter label="sub-agents" value={stats.subAgentCount} />
         <Counter label="peak parallel" value={stats.peakInFlight} />
         <Counter label="longest"    value={fmtDuration(stats.longestMs) || '0ms'} />
         <Counter label="last activity" value={sincePart(stats.lastActivityAt)} />

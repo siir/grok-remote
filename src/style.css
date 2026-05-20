@@ -5845,6 +5845,10 @@ body::before {
 .flow-milestone-node--bg-start  { border-color: var(--amber); color: var(--amber); }
 .flow-milestone-node--bg-end    { border-color: var(--amber); color: var(--muted); }
 .flow-milestone-node--url       { border-color: var(--green); color: var(--green); }
+.flow-milestone-node--sub-agent-spawn { border-color: var(--blue);  color: var(--blue); }
+.flow-milestone-node--sub-agent-start { border-color: var(--blue);  color: var(--blue); }
+.flow-milestone-node--sub-agent-end   { border-color: var(--blue);  color: var(--muted); }
+.flow-milestone-node--sub-agent-fail  { border-color: var(--red);   color: var(--red); }
 .flow-milestone-node__icon {
   display: inline-block;
   width: 12px;
@@ -5963,6 +5967,7 @@ body::before {
 .flow-stats__row-key { color: var(--muted); }
 .flow-stats__row-val { color: var(--text); font-variant-numeric: tabular-nums; }
 .flow-stats__row-val--teal { color: var(--teal); }
+.flow-stats__row-val--blue { color: var(--blue); }
 .flow-stats__empty {
   font-size: 10px;
   color: var(--dim);
@@ -6767,3 +6772,123 @@ body::before {
   font-weight: 600;
 }
 .convo-skills-chip:hover { background: rgba(94, 234, 212, 0.18); text-decoration: none; }
+
+/* ----- sub-agent node (hangs off the LEFT of the parent AgentNode) ----- */
+.flow-subagent-node {
+  width: 180px;
+  background: rgba(121, 192, 255, 0.06);
+  border: 1px solid var(--blue);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  transition: width 120ms ease, background 120ms ease;
+}
+.flow-subagent-node--open { width: 280px; }
+.flow-subagent-node--pending,
+.flow-subagent-node--running,
+.flow-subagent-node--in_progress { border-color: var(--blue); }
+.flow-subagent-node--completed   { border-color: rgba(121, 192, 255, 0.45); background: rgba(121, 192, 255, 0.04); }
+.flow-subagent-node--failed      { border-color: var(--red); }
+.flow-subagent-node--canceled    { border-color: var(--dim); }
+.flow-subagent-node__crumb {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flow-subagent-node__crumb-name {
+  color: var(--teal);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.flow-subagent-node__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+.flow-subagent-node__head:hover { color: var(--blue); }
+.flow-subagent-node__pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--blue);
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--blue);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.flow-subagent-node__label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 600;
+}
+.flow-subagent-node__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--muted);
+}
+.flow-subagent-node__status {
+  font-weight: 600;
+}
+.flow-subagent-node__status--pending,
+.flow-subagent-node__status--running,
+.flow-subagent-node__status--in_progress { color: var(--blue); }
+.flow-subagent-node__status--completed { color: var(--green); }
+.flow-subagent-node__status--failed { color: var(--red); }
+.flow-subagent-node__status--canceled { color: var(--dim); }
+.flow-subagent-node__dur { color: var(--muted); font-variant-numeric: tabular-nums; }
+.flow-subagent-node__body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  max-height: 240px;
+  overflow: auto;
+}
+.flow-subagent-node__section + .flow-subagent-node__section { margin-top: 8px; }
+.flow-subagent-node__section-title {
+  font-size: 8px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 3px;
+}
+.flow-subagent-node__section--empty {
+  color: var(--muted);
+  font-style: italic;
+}
+.flow-subagent-node__pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: rgba(121, 192, 255, 0.04);
+  border: 1px solid rgba(121, 192, 255, 0.18);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
