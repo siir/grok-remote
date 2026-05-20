@@ -203,6 +203,13 @@ export class AgentsSidebar {
     // the recovery path in case the EventSource closes for too long.
     this._startSseStream();
     this.startPolling();
+    // Remote spawn trigger: the chat empty-state "New conversation" button
+    // dispatches this event so it can reuse the same createAgent + select
+    // flow without duplicating it.
+    if (!this._spawnHandlerWired) {
+      document.addEventListener('grok-remote:spawn-agent', () => this.spawnNew());
+      this._spawnHandlerWired = true;
+    }
   }
 
   _startSseStream() {

@@ -76,8 +76,32 @@ export class ChatView {
     this._modelSuggestions = null;
 
     this.empty = el('div', { class: 'chat-empty' },
-      el('div', { class: 'chat-empty-headline' }, 'no agent selected'),
-      el('div', { class: 'chat-empty-sub' }, 'pick one from the sidebar or spawn a new one.'),
+      el('div', { class: 'chat-empty-headline' }, 'no conversation selected'),
+      el('div', { class: 'chat-empty-sub' }, 'pick one from the sidebar or start a new one.'),
+      el('div', { class: 'chat-empty-actions' },
+        el('button', {
+          class: 'btn btn--ghost chat-empty-btn',
+          type: 'button',
+          onclick: () => {
+            // Make sure the sidebar is visible (desktop: dispatch toggle if
+            // currently collapsed; mobile: open the drawer).
+            try {
+              const collapsed = (localStorage.getItem('grok-remote.split.sidebar.collapsed') === '1');
+              if (collapsed) document.dispatchEvent(new CustomEvent('grok-remote:sidebar-toggle'));
+            } catch { /* ignore */ }
+            document.body.setAttribute('data-drawer-open', '1');
+          },
+        }, 'Select conversation'),
+        el('button', {
+          class: 'btn btn--primary chat-empty-btn',
+          type: 'button',
+          onclick: () => {
+            // Reuse the sidebar's spawn handler so the same id-then-select
+            // flow runs (avoids duplicating the createAgent + navigate code).
+            document.dispatchEvent(new CustomEvent('grok-remote:spawn-agent'));
+          },
+        }, 'New conversation'),
+      ),
     );
 
     // Chat-intro animation state. The hole-to-GR figlet plays inside the
