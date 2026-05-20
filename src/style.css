@@ -3743,18 +3743,34 @@ body::before {
 
 .dashboard--with-rail {
   grid-template-columns: 68px var(--sidebar-width, 280px) 1fr;
+  /* Lock to a single row so children that escape grid flow (eg. an
+     absolutely-positioned helper added by JS) cannot create implicit
+     rows that push the topbar off-screen when columns shrink. */
+  grid-template-rows: 1fr;
+  grid-auto-rows: 0;
   position: relative;
 }
 .dashboard--with-rail.dashboard--sidebar-collapsed {
+  /* Collapsed: hardcoded 0 column. Do NOT reference --sidebar-width here
+     so a stale inline custom-prop on .dashboard cannot bring the sidebar
+     back. */
   grid-template-columns: 68px 0 1fr;
 }
 .dashboard--sidebar-collapsed .sidebar {
   display: none;
 }
+/* Defense in depth: hide the in-header toggle while the sidebar itself
+   is collapsed (the button lives inside .sidebar which is display:none,
+   but this keeps the rule self-evident). */
+.dashboard--sidebar-collapsed .sidebar-collapse-btn {
+  display: none;
+}
 
-/* Vertical handle on the sidebar/main seam: drag to resize, hover to highlight. */
+/* Vertical handle on the sidebar/main seam: drag to resize, hover to
+   highlight. Lives on <body> with position: fixed so it can't perturb
+   the dashboard grid. */
 .sidebar-resize-handle {
-  position: absolute;
+  position: fixed;
   top: 0;
   bottom: 0;
   width: 5px;
@@ -3765,11 +3781,12 @@ body::before {
 }
 .sidebar-resize-handle:hover { background: var(--teal); opacity: 0.55; }
 
-/* Edge tab to reopen the sidebar after collapsing. */
+/* Edge tab to reopen the sidebar after collapsing. Also fixed to viewport
+   so it's anchored to (left = rail width) regardless of grid changes.
+   Hover expands the hit area horizontally for easier clicking. */
 .sidebar-reopen-tab {
-  position: absolute;
+  position: fixed;
   top: 50%;
-  /* Sits at the left edge of the main pane (= 68px rail). */
   left: 68px;
   transform: translateY(-50%);
   z-index: 22;
@@ -3784,8 +3801,13 @@ body::before {
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1;
+  transition: width 0.15s ease, color 0.15s, border-color 0.15s;
 }
-.sidebar-reopen-tab:hover { color: var(--teal); border-color: var(--teal); }
+.sidebar-reopen-tab:hover {
+  color: var(--teal);
+  border-color: var(--teal);
+  width: 22px;
+}
 .sidebar-reopen-tab[hidden] { display: none; }
 
 /* Header collapse button inside the sidebar (desktop only). */
@@ -3804,8 +3826,21 @@ body::before {
 .sidebar-collapse-btn:hover { color: var(--teal); border-color: var(--teal); }
 @media (max-width: 720px) {
   .sidebar-collapse-btn { display: none; }
-  .sidebar-resize-handle { display: none; }
-  .sidebar-reopen-tab { display: none; }
+  .sidebar-resize-handle { display: none !important; }
+  .sidebar-reopen-tab { display: none !important; }
+  /* Make the desktop "collapsed" class a no-op on mobile so it can't
+     conflict with the off-canvas drawer flow (body[data-drawer-open]).
+     Mobile uses display:flex column on .dashboard, not grid, so the
+     grid-template-columns override below only matters if someone
+     re-enables grid layout at this breakpoint - safe either way. */
+  .dashboard--with-rail.dashboard--sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .dashboard--sidebar-collapsed .sidebar {
+    /* Re-show the sidebar on mobile; the drawer transform handles
+       visibility instead. */
+    display: flex;
+  }
 }
 .left-rail {
   background: var(--bg);

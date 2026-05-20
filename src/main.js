@@ -494,40 +494,58 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // ── Resizable + collapsible sidebar ──────────────────────────────────────
-function installSidebarResize(shell, sidebar) {
-  const SIDEBAR_W_KEY  = 'grok-remote.sidebar.width';
-  const SIDEBAR_C_KEY  = 'grok-remote.sidebar.collapsed';
+//
+// The skeleton is split into four small helpers so each concern stays
+// readable:
+//
+//   restoreSidebarState  - read localStorage, apply --sidebar-width and
+//                          the collapsed class before the first paint.
+//   attachResizeDrag     - wire the vertical drag handle that lives on the
+//                          sidebar/main seam.
+//   attachToggle         - wire the collapse toggle event + reopen tab.
+//   relayoutOverlays     - reposition the (viewport-fixed) drag handle and
+//                          reopen tab whenever the layout changes.
+//
+// The drag handle and the reopen tab are appended to document.body with
+// position: fixed so they cannot perturb the dashboard grid (an earlier
+// bug: absolutely-positioned children inside a CSS grid were still
+// participating in grid auto-placement, which pushed the topbar off-screen
+// when the sidebar collapsed).
+const SIDEBAR_W_KEY = 'grok-remote.sidebar.width';
+const SIDEBAR_C_KEY = 'grok-remote.sidebar.collapsed';
+const SIDEBAR_W_MIN = 220;
+const SIDEBAR_W_MAX = 560;
+const RAIL_WIDTH    = 68;
+const MOBILE_MAX    = 720;
 
-  // Restore persisted state.
+function isMobileViewport() {
+  return window.matchMedia(`(max-width: ${MOBILE_MAX}px)`).matches;
+}
+
+function restoreSidebarState(shell) {
   try {
     const w = parseInt(localStorage.getItem(SIDEBAR_W_KEY) || '', 10);
-    if (Number.isFinite(w) && w >= 200 && w <= 600) {
+    if (Number.isFinite(w) && w >= SIDEBAR_W_MIN && w <= SIDEBAR_W_MAX) {
       shell.style.setProperty('--sidebar-width', `${w}px`);
     }
     if (localStorage.getItem(SIDEBAR_C_KEY) === '1') {
       shell.classList.add('dashboard--sidebar-collapsed');
-      updateCollapseBtn(true);
     }
   } catch { /* ignore */ }
+}
 
-  // Drag handle (only visible on desktop while sidebar is expanded).
-  const handle = el('div', { class: 'sidebar-resize-handle', title: 'drag to resize' });
-  shell.appendChild(handle);
-  positionHandle();
-
-  const onResize = () => positionHandle();
-  window.addEventListener('resize', onResize);
-
+function attachResizeDrag(shell, sidebar, handle, relayout) {
   handle.addEventListener('mousedown', (ev) => {
     if (shell.classList.contains('dashboard--sidebar-collapsed')) return;
+    if (isMobileViewport()) return;
     ev.preventDefault();
     const startX = ev.clientX;
     const startW = sidebar.root.getBoundingClientRect().width;
     const onMove = (e) => {
       const dx = e.clientX - startX;
-      const w = Math.max(220, Math.min(560, startW + dx));
+      const w = Math.max(SIDEBAR_W_MIN, Math.min(SIDEBAR_W_MAX, startW + dx));
       shell.style.setProperty('--sidebar-width', `${w}px`);
-      positionHandle();
+      relayout();
     };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
@@ -538,48 +556,87 @@ function installSidebarResize(shell, sidebar) {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
+}
 
-  // Reopen tab pinned to the left edge of main when collapsed.
-  const reopenBtn = el('button', {
-    type: 'button',
-    class: 'sidebar-reopen-tab',
-    title: 'expand sidebar',
-    'aria-label': 'expand sidebar',
-    hidden: !shell.classList.contains('dashboard--sidebar-collapsed'),
-    onclick: () => toggleCollapse(),
-  }, '⟩');
-  shell.appendChild(reopenBtn);
-
-  function toggleCollapse(forceState) {
-    const next = (typeof forceState === 'boolean')
-      ? forceState
-      : !shell.classList.contains('dashboard--sidebar-collapsed');
-    shell.classList.toggle('dashboard--sidebar-collapsed', next);
-    updateCollapseBtn(next);
-    reopenBtn.hidden = !next;
-    positionHandle();
-    try { localStorage.setItem(SIDEBAR_C_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-  }
-
-  function updateCollapseBtn(collapsed) {
+function attachToggle(shell, sidebar, handle, reopenBtn, relayout) {
+  function updateCollapseBtnLabel(collapsed) {
     const btn = sidebar.sidebarCollapseBtn;
     if (!btn) return;
     btn.textContent = collapsed ? '⟩' : '⟨';
     btn.title = collapsed ? 'expand sidebar' : 'collapse sidebar';
   }
 
-  function positionHandle() {
-    // Place the handle at the sidebar/main seam.
-    if (shell.classList.contains('dashboard--sidebar-collapsed')) {
-      handle.style.display = 'none';
-      return;
-    }
-    handle.style.display = '';
-    const rect = sidebar.root.getBoundingClientRect();
-    handle.style.left = `${rect.right - 2}px`;
+  function toggleCollapse(forceState) {
+    const next = (typeof forceState === 'boolean')
+      ? forceState
+      : !shell.classList.contains('dashboard--sidebar-collapsed');
+    shell.classList.toggle('dashboard--sidebar-collapsed', next);
+    updateCollapseBtnLabel(next);
+    relayout();
+    try { localStorage.setItem(SIDEBAR_C_KEY, next ? '1' : '0'); } catch { /* ignore */ }
   }
 
+  // Initial sync of the in-sidebar collapse button label.
+  updateCollapseBtnLabel(shell.classList.contains('dashboard--sidebar-collapsed'));
+
+  reopenBtn.addEventListener('click', () => toggleCollapse(false));
   document.addEventListener('grok-remote:sidebar-toggle', () => toggleCollapse());
+}
+
+function relayoutOverlays(shell, sidebar, handle, reopenBtn) {
+  // On mobile the sidebar is an off-canvas drawer; the seam/handle and the
+  // edge-reopen tab have no meaning. Force them hidden so the desktop
+  // collapsed class can't leak into the mobile layout.
+  if (isMobileViewport()) {
+    handle.style.display = 'none';
+    reopenBtn.style.display = 'none';
+    return;
+  }
+
+  const collapsed = shell.classList.contains('dashboard--sidebar-collapsed');
+
+  if (collapsed) {
+    handle.style.display = 'none';
+    reopenBtn.style.display = '';
+    reopenBtn.style.left = `${RAIL_WIDTH}px`;
+  } else {
+    reopenBtn.style.display = 'none';
+    const rect = sidebar.root.getBoundingClientRect();
+    handle.style.display = '';
+    handle.style.left = `${rect.right - 2}px`;
+  }
+}
+
+function installSidebarResize(shell, sidebar) {
+  restoreSidebarState(shell);
+
+  // Both overlays live on <body> with position: fixed (see style.css).
+  // That keeps them OUT of the dashboard grid entirely, so collapse cannot
+  // create implicit grid rows or perturb the topbar.
+  const handle = el('div', {
+    class: 'sidebar-resize-handle',
+    title: 'drag to resize',
+    'aria-hidden': 'true',
+  });
+  const reopenBtn = el('button', {
+    type: 'button',
+    class: 'sidebar-reopen-tab',
+    title: 'expand sidebar',
+    'aria-label': 'expand sidebar',
+  }, '⟩');
+  document.body.appendChild(handle);
+  document.body.appendChild(reopenBtn);
+
+  const relayout = () => relayoutOverlays(shell, sidebar, handle, reopenBtn);
+
+  attachResizeDrag(shell, sidebar, handle, relayout);
+  attachToggle(shell, sidebar, handle, reopenBtn, relayout);
+
+  window.addEventListener('resize', relayout);
+  // Run once after mount so the initial position is correct (the sidebar
+  // root must already be in the DOM and laid out for getBoundingClientRect
+  // to return meaningful coords).
+  requestAnimationFrame(relayout);
 }
 
 // ── Background-process tracker (persistent across pages + reloads) ──────
