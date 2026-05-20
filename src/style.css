@@ -532,16 +532,27 @@ body::before {
   background: rgba(252, 168, 84, 0.10);
 }
 
-/* Archived view */
+/* Archived section: toggle button + the expanded card list grouped under
+   it. A subtle dashed left rail + small indent makes it visually clear
+   the cards belong to the "archived" disclosure rather than floating on
+   their own. */
+.agents-archived {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .agents-archived-toggle {
-  margin-top: 6px;
   background: transparent;
   color: var(--muted);
   border: 1px dashed var(--border);
   border-radius: 6px;
-  padding: 4px 8px;
+  padding: 6px 10px;
   font-family: var(--mono);
   font-size: 11px;
+  letter-spacing: 0.04em;
   text-align: left;
   cursor: pointer;
 }
@@ -549,10 +560,14 @@ body::before {
 .agents-archived-toggle:disabled { color: var(--dim); cursor: default; }
 
 .agents-list--archived {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border);
+  margin: 0;
+  padding: 6px 0 6px 12px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
+.agents-list--archived[hidden] { display: none; }
 .agent-item--archived { opacity: 0.7; }
 .agent-item--archived:hover { opacity: 1; }
 .agent-item--archived .agent-name { color: var(--muted); }

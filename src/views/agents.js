@@ -138,8 +138,10 @@ export class AgentsSidebar {
       ),
       this.error,
       this.activeList,
-      this.archivedToggle,
-      this.archivedList,
+      el('div', { class: 'agents-archived' },
+        this.archivedToggle,
+        this.archivedList,
+      ),
     );
   }
 
