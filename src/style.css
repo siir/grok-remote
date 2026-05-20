@@ -2770,6 +2770,20 @@ body::before {
   flex: 1 1 auto;
   min-width: 0;
 }
+.slash-palette-item .sp-badge {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.slash-palette-item .sp-badge--skill {
+  color: var(--teal);
+  border: 1px solid rgba(94, 234, 212, 0.4);
+  background: rgba(94, 234, 212, 0.08);
+}
 
 /* hint caption shown after a slash command is committed */
 .composer-hint {

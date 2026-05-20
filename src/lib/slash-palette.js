@@ -90,6 +90,13 @@ export default function attachSlashPalette({ textarea, getCommands, onCommit }) 
       desc.textContent = cmd?.description || '';
 
       row.appendChild(name);
+      if (cmd?.kind === 'skill') {
+        const badge = document.createElement('span');
+        badge.className = 'sp-badge sp-badge--skill';
+        badge.textContent = 'skill';
+        if (cmd.scope) badge.title = cmd.scope;
+        row.appendChild(badge);
+      }
       row.appendChild(desc);
 
       row.addEventListener('mousedown', (ev) => {

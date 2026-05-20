@@ -46,6 +46,7 @@ export class ChatView {
     // user message that starts with `/`. Drives the "invoked skill" banner
     // we drop above turns that hit a /name match.
     this._knownSkills = null;
+    this._skillCommands = [];
     this._skillsPromise = null;
 
     this.streamEl  = el('div', { class: 'chat-stream' });
@@ -484,7 +485,7 @@ export class ChatView {
 
     this._detachPalette = attachSlashPalette({
       textarea: this.composerTa,
-      getCommands: () => this.availableCommands,
+      getCommands: () => this._mergedCommands(),
       onCommit: ({ command, hint }) => {
         if (hint && this.composerHint) {
           this.composerHint.textContent = `usage: /${command.name} ${hint}`;
@@ -523,13 +524,28 @@ export class ChatView {
       try {
         const data = await api.skills.list();
         const set = new Set();
+        const palette = [];
+        const seenNames = new Set();
         for (const s of ((data && data.skills) || [])) {
-          if (s && typeof s.name === 'string' && s.name) set.add(s.name);
+          if (!s || typeof s.name !== 'string' || !s.name) continue;
+          set.add(s.name);
+          // Deduplicate by name so the same skill from multiple scopes only
+          // shows once in the palette (scope shadowing: cwd > repo > user).
+          if (seenNames.has(s.name)) continue;
+          seenNames.add(s.name);
+          palette.push({
+            name: s.name,
+            description: s.description || s.title || '',
+            kind: 'skill',
+            scope: s.scope || '',
+          });
         }
         this._knownSkills = set;
+        this._skillCommands = palette;
         return set;
       } catch {
         this._knownSkills = new Set();
+        this._skillCommands = [];
         return this._knownSkills;
       }
     })();
@@ -580,6 +596,24 @@ export class ChatView {
   setAvailableCommands(list) {
     if (!Array.isArray(list)) return;
     this.availableCommands = list;
+  }
+
+  _mergedCommands() {
+    // Merge agent-advertised commands with the filesystem-discovered skills.
+    // Skills are deduplicated by name across scopes so the user sees each
+    // once. Agent commands win on name conflict (they're the live API).
+    const agentNames = new Set();
+    const out = [];
+    for (const c of (this.availableCommands || [])) {
+      if (!c || typeof c.name !== 'string') continue;
+      agentNames.add(c.name);
+      out.push(c);
+    }
+    for (const s of (this._skillCommands || [])) {
+      if (!s || agentNames.has(s.name)) continue;
+      out.push(s);
+    }
+    return out;
   }
 
   _setComposerEnabled(enabled) {
