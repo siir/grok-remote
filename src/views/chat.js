@@ -75,11 +75,19 @@ export class ChatView {
       el('div', { class: 'chat-empty-sub' }, 'pick one from the sidebar or spawn a new one.'),
     );
 
+    // Strip pinned above the chat stream that lists tool calls currently
+    // in flight. Each chip shows kind + label + live duration; clicking
+    // scrolls to that tool's pill in the conversation. Hidden when empty.
+    this.inFlightStripEl = el('div', { class: 'inflight-strip', hidden: true });
+    this._inFlightMap = new Map(); // toolCallId -> { kind, label, startedAt, chip }
+    this._inFlightTimer = null;
+
     this.root = el('section', { class: 'chat' },
       this.tabsEl,
       el('div', { class: 'chat-body' },
         el('div', { class: 'pane pane--conversation' },
           this.statusEl,
+          this.inFlightStripEl,
           this.streamEl,
           this.composerEl,
         ),
@@ -147,6 +155,7 @@ export class ChatView {
     }
     if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
     if (this._detachAutoScroll) { try { this._detachAutoScroll(); } catch { /* ignore */ } this._detachAutoScroll = null; }
+    if (this._inFlightTimer) { try { clearInterval(this._inFlightTimer); } catch { /* ignore */ } this._inFlightTimer = null; }
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
     if (this._onAgentsRefresh) {
@@ -694,6 +703,7 @@ export class ChatView {
     if (this.connectBtn)  this.connectBtn.hidden = false;
 
     const switchingAgent = this.agentId !== agent.id;
+    if (switchingAgent) this._clearAllInFlight();
     this.agentId = agent.id;
     this.currentAgent = agent;
     this.latestTotalTokens = (agent && agent.totalTokens) || null;
@@ -1057,6 +1067,87 @@ export class ChatView {
     };
   }
 
+  // ── in-flight strip ──────────────────────────────────────────────────
+
+  _addInFlight(data, cardNode) {
+    if (!data || !data.toolCallId) return;
+    if (this._inFlightMap.has(data.toolCallId)) return;
+    const label = (data.rawInput && (data.rawInput.command || data.rawInput.path || data.rawInput.file_path || data.rawInput.url))
+                || data.title
+                || data.kind
+                || 'tool';
+    const kind = data.kind || 'tool';
+    const startedAt = Date.now();
+    const chip = el('button', {
+      type: 'button',
+      class: 'inflight-chip',
+      title: `${kind} · ${label}`,
+      onclick: () => {
+        // Scroll the card into view and pulse it briefly so the user can
+        // confirm which one in the stream it maps to.
+        if (cardNode && cardNode.scrollIntoView) {
+          cardNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          cardNode.classList.add('tool-pill--highlight');
+          setTimeout(() => cardNode.classList.remove('tool-pill--highlight'), 1200);
+        }
+      },
+    },
+      el('span', { class: 'inflight-chip__dot' }),
+      el('span', { class: 'inflight-chip__kind' }, kind),
+      el('span', { class: 'inflight-chip__label' }, String(label)),
+      el('span', { class: 'inflight-chip__dur' }, '0s'),
+    );
+    this._inFlightMap.set(data.toolCallId, { kind, label, startedAt, chip });
+    this.inFlightStripEl.appendChild(chip);
+    this._syncInFlightVisibility();
+    this._startInFlightTicker();
+  }
+
+  _removeInFlight(toolCallId) {
+    const entry = this._inFlightMap.get(toolCallId);
+    if (!entry) return;
+    entry.chip.remove();
+    this._inFlightMap.delete(toolCallId);
+    this._syncInFlightVisibility();
+    if (this._inFlightMap.size === 0 && this._inFlightTimer) {
+      clearInterval(this._inFlightTimer);
+      this._inFlightTimer = null;
+    }
+  }
+
+  _clearAllInFlight() {
+    this._inFlightMap.clear();
+    this.inFlightStripEl.replaceChildren();
+    this._syncInFlightVisibility();
+    if (this._inFlightTimer) {
+      clearInterval(this._inFlightTimer);
+      this._inFlightTimer = null;
+    }
+  }
+
+  _syncInFlightVisibility() {
+    this.inFlightStripEl.hidden = this._inFlightMap.size === 0;
+  }
+
+  _startInFlightTicker() {
+    if (this._inFlightTimer) return;
+    this._inFlightTimer = setInterval(() => {
+      const now = Date.now();
+      for (const entry of this._inFlightMap.values()) {
+        const ms = now - entry.startedAt;
+        const durEl = entry.chip.querySelector('.inflight-chip__dur');
+        if (!durEl) continue;
+        if (ms < 1000) durEl.textContent = `${Math.round(ms)}ms`;
+        else if (ms < 60000) durEl.textContent = `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
+        else {
+          const m = Math.floor(ms / 60000);
+          const s = Math.round((ms % 60000) / 1000);
+          durEl.textContent = `${m}m${s ? ` ${s}s` : ''}`;
+        }
+      }
+    }, 500);
+  }
+
   // ── event dispatch ──────────────────────────────────────────────────
 
   handleEvent(name, payload, opts) {
@@ -1064,8 +1155,8 @@ export class ChatView {
     switch (name) {
       case 'agent_message_chunk':       return this.onMessageChunk(data);
       case 'agent_thought_chunk':       return this.onThoughtChunk(data);
-      case 'tool_call':                 return this.onToolCall(data);
-      case 'tool_call_update':          return this.onToolCallUpdate(data);
+      case 'tool_call':                 return this.onToolCall(data, opts);
+      case 'tool_call_update':          return this.onToolCallUpdate(data, opts);
       case 'tool_call_delta_chunk':     return this.onToolCallDelta(data);
       case 'available_commands_update': return this.onAvailableCommands(data);
       case 'handshake':                 return this.onHandshake(data);
@@ -1102,15 +1193,20 @@ export class ChatView {
     this.scrollToBottom();
   }
 
-  onToolCall(data) {
+  onToolCall(data, opts) {
     const turn = this.ensureTurn();
     const card = renderToolCard(data);
     turn.tools.push({ id: data.toolCallId, card });
     turn.root.appendChild(card.node);
+    // Add to the in-flight strip unless this came from history replay
+    // (those calls are already terminal and would just flash).
+    if (!(opts && opts.fromHistory)) {
+      this._addInFlight(data, card.node);
+    }
     this.scrollToBottom();
   }
 
-  onToolCallUpdate(data) {
+  onToolCallUpdate(data, opts) {
     const turn = this.activeTurn || this.turns[this.turns.length - 1];
     if (!turn) return;
     const entry = turn.tools.find(t => t.id === data.toolCallId);
@@ -1121,6 +1217,14 @@ export class ChatView {
       const card = renderToolCard(data);
       turn.tools.push({ id: data.toolCallId, card });
       turn.root.appendChild(card.node);
+      if (!(opts && opts.fromHistory)) this._addInFlight(data, card.node);
+    }
+    // If this update is terminal, remove from the strip.
+    const status = String(data && data.status || '').toLowerCase();
+    const metaStatus = String((data && data._meta && data._meta.updateParams && data._meta.updateParams.status) || '').toLowerCase();
+    if (['completed','success','succeeded','failed','error','errored','canceled','cancelled'].includes(status) ||
+        ['completed','success','succeeded','failed','error','errored','canceled','cancelled'].includes(metaStatus)) {
+      this._removeInFlight(data.toolCallId);
     }
   }
 
@@ -1180,6 +1284,10 @@ export class ChatView {
       this._renderTokensPill();
     this._renderInflightPill();
     }
+    // The turn is done; any tools that didn't get a terminal update were
+    // implicitly completed (or aborted). Clear the strip so it doesn't
+    // show ghost activity between turns.
+    this._clearAllInFlight();
     // Capture sessionId/cwd from prompt_complete meta if the agent record is
     // missing it (handshake metadata is sometimes delivered out of band).
     if (this.currentAgent) {

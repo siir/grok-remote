@@ -771,6 +771,70 @@ body::before {
 }
 .pane.hidden { display: none; }
 
+/* Active jobs strip pinned above the chat stream */
+.inflight-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 16px;
+  border-bottom: 1px dashed var(--border);
+  background: linear-gradient(180deg, rgba(252, 168, 84, 0.06), transparent);
+}
+.inflight-strip[hidden] { display: none; }
+.inflight-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--panel-2);
+  border: 1px solid rgba(252, 168, 84, 0.4);
+  border-radius: 999px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.inflight-chip:hover { background: var(--panel); }
+.inflight-chip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  flex: 0 0 auto;
+  animation: agent-inflight-pulse 1.2s ease-in-out infinite;
+}
+.inflight-chip__kind {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.inflight-chip__label {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  min-width: 0;
+}
+.inflight-chip__dur {
+  font-size: 10px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+/* Brief highlight when a chip is clicked and we scroll to the corresponding
+   pill in the stream. Subtle so it doesn't read as a glitch. */
+.tool-pill--highlight {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+  transition: outline-color 0.4s ease;
+}
+
 /* "↓ jump to latest" floating button shown when auto-scroll is paused. */
 .jump-to-latest {
   position: absolute;
