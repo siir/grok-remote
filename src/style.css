@@ -1459,10 +1459,10 @@ body::before {
 .msg--user .msg-role { color: var(--blue); }
 .msg-attachments {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(192px, 1fr));
+  gap: 10px;
   margin-top: 8px;
-  max-width: min(360px, 100%);
+  max-width: min(720px, 100%);
 }
 .msg-body > .msg-attachments:first-child {
   margin-top: 0;
