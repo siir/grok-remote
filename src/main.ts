@@ -12,8 +12,6 @@ import { installVersionFooter } from './lib/version-footer.js';
 import { SYSTEM_PAGES, getSystemPage } from './views/system/index.js';
 import { iconHtml } from './lib/icons.js';
 
-declare const __APP_VERSION__: string;
-
 interface Agent {
   id: string;
   name?: string;
@@ -234,12 +232,6 @@ function mountDashboard(): void {
       navigate('#/');
       closeDrawer();
     });
-  }
-
-  const brandVersion = document.getElementById('brand-version');
-  if (brandVersion && typeof __APP_VERSION__ === 'string' && __APP_VERSION__) {
-    brandVersion.textContent = 'v' + __APP_VERSION__;
-    brandVersion.title = `grok-remote v${__APP_VERSION__}`;
   }
 
   const brandActive = document.getElementById('brand-active') as HTMLElement | null;
