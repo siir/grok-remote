@@ -24,8 +24,13 @@ const SORT_KEY        = 'grok-remote.sidebar.sort';
 const SEARCH_KEY      = 'grok-remote.sidebar.search';
 const COLLAPSED_KEY   = 'grok-remote.sidebar.collapsed-folders';
 const SORT_DEFAULT    = 'created_desc';
-const LONG_PRESS_MS   = 500;
-const DRAG_MOVE_THRESH = 6;
+// Touch needs a long-press because vertical drag is reserved for scrolling.
+// Mouse/pen activate drag immediately past a small horizontal move threshold.
+const LONG_PRESS_MS    = 450;
+const MOUSE_DRAG_THRESH = 6;
+const TOUCH_MOVE_THRESH = 8;
+// A pointerup within this window with no movement counts as a plain click.
+const CLICK_MAX_MS = 250;
 
 interface SortConfig { label: string; cmp(a: Agent, b: Agent): number }
 
@@ -122,13 +127,20 @@ export class AgentsSidebar {
   private _drag: {
     agentId: string;
     pointerId: number;
+    pointerType: string;
     startX: number;
     startY: number;
+    startTime: number;
     sourceEl: HTMLElement;
     ghost: HTMLElement | null;
     active: boolean;
+    captured: boolean;
     pressTimer: number | null;
+    moved: boolean;
   } | null = null;
+
+  private _ctxMenu: HTMLElement | null = null;
+  private _ctxCleanup: (() => void) | null = null;
 
   constructor({ onSelect, onCreate, onDelete }: AgentsSidebarOptions) {
     this.onSelect = onSelect;
@@ -143,6 +155,12 @@ export class AgentsSidebar {
     this.collapsed = loadCollapsed();
 
     this.activeList = el('div', { class: 'agents-list' }) as HTMLElement;
+    // Drop-target highlight should clear if the user drags out of the list.
+    this.activeList.addEventListener('pointerleave', () => {
+      this.activeList.querySelectorAll('.folder-header--drop').forEach((n) =>
+        n.classList.remove('folder-header--drop'),
+      );
+    });
 
     this.empty = el('div', { class: 'agents-empty' }, 'no agents yet') as HTMLElement;
     this.noMatch = el('div', { class: 'agents-empty' }, 'no conversations match your search') as HTMLElement;
@@ -409,6 +427,10 @@ export class AgentsSidebar {
   }
 
   renderList(errorMessage?: string): void {
+    this._closeContextMenu();
+    // If an SSE-triggered re-render lands mid-drag, kill the drag so we don't
+    // leave a ghost stranded against a recycled source element.
+    if (this._drag) this._cancelDrag();
     this.activeList.replaceChildren();
     if (this.searchClearBtn) this.searchClearBtn.hidden = !this.search;
 
@@ -708,7 +730,11 @@ export class AgentsSidebar {
         a.starred      ? 'agent-item--starred' : '',
       ].filter(Boolean).join(' '),
       'data-agent-id': a.id,
-      onclick: () => this.select(a.id),
+      oncontextmenu: (ev: MouseEvent) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._showContextMenu(a, ev.clientX, ev.clientY);
+      },
     },
       el('div', { class: 'agent-item-top' },
         dot,
@@ -719,34 +745,55 @@ export class AgentsSidebar {
       el('div', { class: 'agent-item-meta' }, ...metaChildren),
     ) as HTMLElement;
 
-    if (!isArchived) this._attachDragHandlers(item, a.id);
+    // Treat genuinely-archived agents as non-draggable regardless of the
+    // legacy parameter (the folder system handles archived now).
+    const treatAsArchived = isArchived || !!a.archived;
+    this._attachDragHandlers(item, a, treatAsArchived);
     return item;
   }
 
-  // Pointer-events drag/drop. Long-press to start, follow finger/mouse, drop on
-  // a folder header to assign. The same code path covers desktop and touch.
-  private _attachDragHandlers(item: HTMLElement, agentId: string): void {
+  // Pointer-events drag/drop. Mouse/pen drag activates as soon as horizontal
+  // motion crosses MOUSE_DRAG_THRESH; touch uses a long-press so vertical
+  // scroll still works. We do NOT setPointerCapture until drag actually
+  // activates: capturing on pointerdown was breaking the row's own click-to-
+  // select because pointer capture redirects subsequent events away from any
+  // ancestor click target until release.
+  private _attachDragHandlers(item: HTMLElement, agent: Agent, isArchived: boolean): void {
+    const agentId = agent.id;
+
     const onPointerDown = (ev: PointerEvent): void => {
       if (ev.button !== undefined && ev.button !== 0) return;
-      // Don't start a drag from interactive controls inside the row.
       const target = ev.target as HTMLElement | null;
+      // Interactive controls handle their own clicks; never start drag from one.
       if (target && target.closest('button, input, select, textarea, a')) return;
       this._cancelDrag();
       const drag = {
         agentId,
         pointerId: ev.pointerId,
+        pointerType: ev.pointerType || 'mouse',
         startX: ev.clientX,
         startY: ev.clientY,
+        startTime: performance.now(),
         sourceEl: item,
         ghost: null as HTMLElement | null,
         active: false,
+        captured: false,
         pressTimer: null as number | null,
+        moved: false,
       };
       this._drag = drag;
-      drag.pressTimer = window.setTimeout(() => {
-        if (this._drag === drag) this._activateDrag(ev.clientX, ev.clientY);
-      }, LONG_PRESS_MS);
-      try { item.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
+      if (isArchived) {
+        // Archived rows don't drag (drop targets are non-archived folders),
+        // but we still want click-to-select to work via pointerup below.
+        return;
+      }
+      if (drag.pointerType === 'touch') {
+        // Touch: wait for the long-press; mouse skips the timer entirely so
+        // click-and-drag feels immediate.
+        drag.pressTimer = window.setTimeout(() => {
+          if (this._drag === drag) this._activateDrag(drag.startX, drag.startY);
+        }, LONG_PRESS_MS);
+      }
     };
 
     const onPointerMove = (ev: PointerEvent): void => {
@@ -754,15 +801,22 @@ export class AgentsSidebar {
       if (!drag || drag.pointerId !== ev.pointerId) return;
       const dx = ev.clientX - drag.startX;
       const dy = ev.clientY - drag.startY;
+      const moved = Math.hypot(dx, dy);
       if (!drag.active) {
-        // Cancel the press-and-hold if the user is just scrolling vertically.
-        const moved = Math.hypot(dx, dy);
-        if (moved > DRAG_MOVE_THRESH) {
-          if (Math.abs(dy) > Math.abs(dx)) {
-            // Vertical drag = scroll intent. Bail out so the list scrolls.
-            this._cancelDrag();
-            return;
-          }
+        if (isArchived) {
+          // Mark moved so pointerup will skip the click branch; archived rows
+          // never start a drag.
+          if (moved > MOUSE_DRAG_THRESH) drag.moved = true;
+          return;
+        }
+        if (drag.pointerType === 'touch') {
+          // Touch: any movement before the long-press fires means "scroll".
+          if (moved > TOUCH_MOVE_THRESH) this._cancelDrag();
+          return;
+        }
+        // Mouse / pen: cross MOUSE_DRAG_THRESH on the X axis to start drag.
+        if (Math.abs(dx) >= MOUSE_DRAG_THRESH || moved >= MOUSE_DRAG_THRESH * 2) {
+          drag.moved = true;
           this._activateDrag(ev.clientX, ev.clientY);
         }
         return;
@@ -775,11 +829,32 @@ export class AgentsSidebar {
     const onPointerUp = (ev: PointerEvent): void => {
       const drag = this._drag;
       if (!drag || drag.pointerId !== ev.pointerId) return;
-      try { item.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
-      if (!drag.active) { this._cancelDrag(); return; }
-      const target = this._findDropTarget(ev.clientX, ev.clientY);
-      this._endDrag();
-      if (target) void this._assignAgentToFolder(drag.agentId, target);
+      if (drag.captured) {
+        try { item.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+      }
+      if (drag.active) {
+        const target = this._findDropTarget(ev.clientX, ev.clientY);
+        this._endDrag();
+        if (target) void this._assignAgentToFolder(drag.agentId, target);
+        return;
+      }
+      // No drag activated: treat as a click and select the row. We do this
+      // explicitly because there is no native onclick (we needed pointer
+      // capture to NOT swallow the click, but doing nothing leaves no
+      // selection at all on touch where browsers sometimes skip the
+      // synthesised click).
+      const dt = performance.now() - drag.startTime;
+      const dx = Math.abs(ev.clientX - drag.startX);
+      const dy = Math.abs(ev.clientY - drag.startY);
+      this._cancelDrag();
+      const isClick = dt < CLICK_MAX_MS * 4
+        && dx < MOUSE_DRAG_THRESH
+        && dy < MOUSE_DRAG_THRESH;
+      if (isClick) {
+        const tgt = ev.target as HTMLElement | null;
+        if (tgt && tgt.closest('button, input, select, textarea, a')) return;
+        this.select(agentId);
+      }
     };
 
     const onPointerCancel = (ev: PointerEvent): void => {
@@ -799,7 +874,12 @@ export class AgentsSidebar {
     if (!drag || drag.active) return;
     drag.active = true;
     if (drag.pressTimer) { clearTimeout(drag.pressTimer); drag.pressTimer = null; }
-    // Build a floating ghost that follows the pointer.
+    // Capture only now. Capturing on pointerdown was breaking taps because
+    // the captured pointer's events bypass the row's click semantics.
+    try {
+      drag.sourceEl.setPointerCapture(drag.pointerId);
+      drag.captured = true;
+    } catch { /* ignore */ }
     const rect = drag.sourceEl.getBoundingClientRect();
     const ghost = drag.sourceEl.cloneNode(true) as HTMLElement;
     ghost.classList.add('agent-drag-ghost');
@@ -808,12 +888,13 @@ export class AgentsSidebar {
     ghost.style.top = `${rect.top}px`;
     ghost.style.width = `${rect.width}px`;
     ghost.style.pointerEvents = 'none';
-    ghost.style.opacity = '0.85';
     ghost.style.zIndex = '9999';
     document.body.appendChild(ghost);
     drag.ghost = ghost;
     drag.sourceEl.classList.add('agent-item--dragging');
+    document.body.classList.add('agents-dragging');
     this._moveGhost(clientX, clientY);
+    this._highlightDropTarget(clientX, clientY);
     if (navigator.vibrate) { try { navigator.vibrate(10); } catch { /* ignore */ } }
   }
 
@@ -855,8 +936,12 @@ export class AgentsSidebar {
     const drag = this._drag;
     if (!drag) return;
     if (drag.pressTimer) { clearTimeout(drag.pressTimer); drag.pressTimer = null; }
+    if (drag.captured) {
+      try { drag.sourceEl.releasePointerCapture(drag.pointerId); } catch { /* ignore */ }
+    }
     if (drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
     drag.sourceEl.classList.remove('agent-item--dragging');
+    document.body.classList.remove('agents-dragging');
     this.activeList.querySelectorAll('.folder-header--drop').forEach((n) => n.classList.remove('folder-header--drop'));
     this._drag = null;
   }
@@ -882,5 +967,186 @@ export class AgentsSidebar {
     this.selectedId = id;
     this.renderList();
     if (typeof this.onSelect === 'function') this.onSelect(id);
+  }
+
+  private _showContextMenu(a: Agent, clientX: number, clientY: number): void {
+    this._closeContextMenu();
+
+    const isArchived = !!a.archived;
+    const isStarred  = !!a.starred;
+
+    const items: HTMLElement[] = [];
+
+    const mkItem = (label: string, run: () => void, opts?: { danger?: boolean }): HTMLElement => {
+      const btn = el('button', {
+        class: `ctx-menu__item${opts && opts.danger ? ' ctx-menu__danger' : ''}`,
+        type: 'button',
+        onclick: (ev: MouseEvent) => {
+          ev.stopPropagation();
+          this._closeContextMenu();
+          run();
+        },
+      }, label) as HTMLElement;
+      return btn;
+    };
+
+    const mkSep = (): HTMLElement => el('div', { class: 'ctx-menu__sep' }) as HTMLElement;
+
+    items.push(mkItem(isStarred ? 'Unstar' : 'Star', async () => {
+      try {
+        await api.updateAgent(a.id, { starred: !isStarred });
+        await this.refresh();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        alert(`star failed: ${msg}`);
+      }
+    }));
+
+    items.push(mkItem('Rename', () => {
+      const node = this.activeList.querySelector<HTMLElement>(
+        `.agent-item[data-agent-id="${CSS.escape(a.id)}"] .agent-name`,
+      );
+      if (node) this.beginInlineRenameAgent(a, node);
+    }));
+
+    items.push(mkSep());
+
+    // Move to folder. Inline the candidate folders right in the menu (a single
+    // flat list keeps the implementation small + works fine on touch). System
+    // folders (Archived) are excluded; "Archive" handles that case.
+    const moveTargets = this.folders.filter((f) => !f.system);
+    const currentFolder = (() => {
+      for (const f of this.folders) if (f.agentIds.includes(a.id)) return f.id;
+      return null;
+    })();
+
+    if (moveTargets.length > 0 || currentFolder) {
+      items.push(el('div', { class: 'ctx-menu__heading' }, 'Move to') as HTMLElement);
+      items.push(mkItem(`(no folder)${currentFolder ? '' : '  •'}`, async () => {
+        try {
+          await api.agents.setFolder(a.id, null);
+          await this.refreshFolders();
+          this.renderList();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          alert(`move failed: ${msg}`);
+        }
+      }));
+      for (const f of moveTargets) {
+        const label = currentFolder === f.id ? `${f.name}  •` : f.name;
+        items.push(mkItem(label, async () => {
+          try {
+            await api.agents.setFolder(a.id, f.id);
+            await this.refreshFolders();
+            this.renderList();
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            alert(`move failed: ${msg}`);
+          }
+        }));
+      }
+      items.push(mkSep());
+    }
+
+    items.push(mkItem(isArchived ? 'Unarchive' : 'Archive', async () => {
+      try {
+        await api.updateAgent(a.id, { archived: !isArchived });
+        if (!isArchived && this.selectedId === a.id) this.selectedId = null;
+        await this.refresh();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        alert(`archive failed: ${msg}`);
+      }
+    }));
+
+    items.push(mkItem('Copy id', async () => {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(a.id);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = a.id;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch { /* ignore */ }
+          document.body.removeChild(ta);
+        }
+      } catch {
+        alert('copy failed');
+      }
+    }));
+
+    items.push(mkSep());
+
+    items.push(mkItem('Delete…', async () => {
+      if (!confirm(`Delete "${a.name || a.id}" forever?\nThis removes its history and uploaded files. Cannot be undone.`)) return;
+      try {
+        await api.deleteAgent(a.id);
+        if (typeof this.onDelete === 'function') this.onDelete(a.id);
+        if (this.selectedId === a.id) this.selectedId = null;
+        await this.refresh();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        alert(`delete failed: ${msg}`);
+      }
+    }, { danger: true }));
+
+    const menu = el('div', {
+      class: 'ctx-menu',
+      role: 'menu',
+      // Stop bubbling so the document-level dismiss listener does not fire
+      // when clicking inside the menu itself.
+      onclick: (ev: MouseEvent) => ev.stopPropagation(),
+      oncontextmenu: (ev: MouseEvent) => { ev.preventDefault(); this._closeContextMenu(); },
+    }, ...items) as HTMLElement;
+
+    // Position offscreen first so we can measure and clamp.
+    menu.style.position = 'fixed';
+    menu.style.left = '-9999px';
+    menu.style.top  = '-9999px';
+    document.body.appendChild(menu);
+
+    const rect = menu.getBoundingClientRect();
+    const margin = 6;
+    const maxX = window.innerWidth  - rect.width  - margin;
+    const maxY = window.innerHeight - rect.height - margin;
+    const x = Math.max(margin, Math.min(clientX, maxX));
+    const y = Math.max(margin, Math.min(clientY, maxY));
+    menu.style.left = `${x}px`;
+    menu.style.top  = `${y}px`;
+    this._ctxMenu = menu;
+
+    const onDocPointerDown = (ev: PointerEvent): void => {
+      const tgt = ev.target as Node | null;
+      if (tgt && menu.contains(tgt)) return;
+      this._closeContextMenu();
+    };
+    const onDocContextMenu = (ev: MouseEvent): void => {
+      const tgt = ev.target as Node | null;
+      if (tgt && menu.contains(tgt)) return;
+      // Let a fresh contextmenu open the new one; just close this one now.
+      this._closeContextMenu();
+    };
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') { ev.preventDefault(); this._closeContextMenu(); }
+    };
+    // Fire on the *next* tick so the contextmenu event that opened us does
+    // not immediately close it.
+    setTimeout(() => {
+      document.addEventListener('pointerdown', onDocPointerDown, true);
+      document.addEventListener('contextmenu', onDocContextMenu, true);
+      document.addEventListener('keydown', onKey, true);
+    }, 0);
+    this._ctxCleanup = () => {
+      document.removeEventListener('pointerdown', onDocPointerDown, true);
+      document.removeEventListener('contextmenu', onDocContextMenu, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }
+
+  private _closeContextMenu(): void {
+    if (this._ctxCleanup) { try { this._ctxCleanup(); } catch { /* ignore */ } this._ctxCleanup = null; }
+    if (this._ctxMenu && this._ctxMenu.parentNode) this._ctxMenu.parentNode.removeChild(this._ctxMenu);
+    this._ctxMenu = null;
   }
 }

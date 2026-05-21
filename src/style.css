@@ -8862,8 +8862,11 @@ body::before {
 
 .agent-item--dragging { opacity: 0.35; }
 .agent-drag-ghost {
-  box-shadow: 0 8px 20px rgba(0,0,0,0.45);
-  transform: rotate(-1deg);
+  opacity: 0.92;
+  transform: scale(1.02) rotate(-1deg);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45),
+              0 2px 6px rgba(0, 0, 0, 0.35);
+  border-color: var(--teal);
 }
 
 /* Touch surface: the row needs to absorb touch so we can recognise a
@@ -8874,6 +8877,83 @@ body::before {
   touch-action: pan-y;
   -webkit-user-select: none;
   user-select: none;
+  cursor: pointer;
+}
+/* Mouse hover hint: non-selected rows look grabbable. */
+@media (hover: hover) and (pointer: fine) {
+  .agent-item:not(.agent-item--selected):not(.agent-item--archived) { cursor: grab; }
+  .agent-item.agent-item--dragging { cursor: grabbing; }
+  body.agents-dragging,
+  body.agents-dragging .agent-item { cursor: grabbing; }
+}
+
+/* Drop-target pulse: a slightly brighter teal outline that breathes so the
+   user can tell the target accepts the drop. */
+.folder-header--drop {
+  outline: 1px solid var(--teal);
+  outline-offset: -1px;
+  animation: agent-folder-drop-pulse 1.2s ease-in-out infinite;
+}
+@keyframes agent-folder-drop-pulse {
+  0%, 100% { background: rgba(94, 234, 212, 0.10); }
+  50%      { background: rgba(94, 234, 212, 0.18); }
+}
+
+/* ── context menu (right-click on agent rows) ─────────────────────── */
+.ctx-menu {
+  position: fixed;
+  z-index: 240;
+  min-width: 180px;
+  max-width: 260px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5),
+              0 2px 6px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.ctx-menu__item {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.3;
+}
+.ctx-menu__item:hover,
+.ctx-menu__item:focus-visible {
+  background: rgba(94, 234, 212, 0.10);
+  color: var(--text);
+  outline: none;
+}
+.ctx-menu__item:active { background: rgba(94, 234, 212, 0.18); }
+.ctx-menu__danger { color: var(--red); }
+.ctx-menu__danger:hover,
+.ctx-menu__danger:focus-visible {
+  background: rgba(255, 123, 114, 0.12);
+  color: var(--red);
+}
+.ctx-menu__sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+.ctx-menu__heading {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 /* ── registry picker (MCP / LSP "browse registry" modal) ─────────────── */
