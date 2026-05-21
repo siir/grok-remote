@@ -3,6 +3,19 @@
 
 import { api } from '../lib/api.js';
 import { el, escapeHtml } from '../lib/render.js';
+import { iconHtml } from '../lib/icons.js';
+
+const TREE_COLLAPSED_KEY = 'grok-remote.files.treeCollapsed';
+
+function readTreeCollapsed() {
+  try { return localStorage.getItem(TREE_COLLAPSED_KEY) === '1'; }
+  catch { return false; }
+}
+
+function writeTreeCollapsed(v) {
+  try { localStorage.setItem(TREE_COLLAPSED_KEY, v ? '1' : '0'); }
+  catch { /* ignore */ }
+}
 
 let activeState = null;
 
@@ -46,6 +59,23 @@ function parentPath(p) {
   return i < 0 ? '' : cleaned.slice(0, i);
 }
 
+function applyTreeCollapsedClass(state) {
+  if (!state.root) return;
+  state.root.classList.toggle('files--tree-collapsed', !!state.treeCollapsed);
+  if (state.treeToggleBtn) {
+    const c = !!state.treeCollapsed;
+    state.treeToggleBtn.innerHTML = iconHtml(c ? 'panel-left-open' : 'panel-left-close');
+    state.treeToggleBtn.title = c ? 'show file list' : 'hide file list';
+  }
+}
+
+function setTreeCollapsed(state, next) {
+  if (!state) return;
+  state.treeCollapsed = !!next;
+  writeTreeCollapsed(state.treeCollapsed);
+  applyTreeCollapsedClass(state);
+}
+
 export function mountFilesTab(container, agent) {
   unmountFilesTab();
   if (!container) return;
@@ -84,6 +114,17 @@ export function mountFilesTab(container, agent) {
   const viewerBody = el('div', { class: 'files-viewer-body' },
     el('div', { class: 'pane-empty' }, 'select a file to preview'));
 
+  // Collapse/expand toggle for the tree column. Lives in the viewer
+  // header so it stays reachable when the tree is hidden. Persisted in
+  // localStorage so the choice survives reloads and agent switches.
+  const treeToggleBtn = el('button', {
+    type: 'button',
+    class: 'files-tree-toggle',
+    title: 'collapse file list',
+    'aria-label': 'toggle file list',
+    onclick: () => setTreeCollapsed(state, !state.treeCollapsed),
+  });
+
   const tree = el('div', { class: 'files-tree' },
     el('div', { class: 'files-tree-header' },
       breadcrumb,
@@ -93,6 +134,7 @@ export function mountFilesTab(container, agent) {
   );
   const viewer = el('div', { class: 'files-viewer' },
     el('div', { class: 'files-viewer-header' },
+      treeToggleBtn,
       backBtn,
       el('div', { class: 'files-viewer-title' }, ''),
     ),
@@ -106,6 +148,9 @@ export function mountFilesTab(container, agent) {
   state.viewerBody = viewerBody;
   state.viewerTitle = viewer.querySelector('.files-viewer-title');
   state.backBtn = backBtn;
+  state.treeToggleBtn = treeToggleBtn;
+  state.treeCollapsed = readTreeCollapsed();
+  applyTreeCollapsedClass(state);
 
   container.replaceChildren(root);
 

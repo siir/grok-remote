@@ -2091,6 +2091,34 @@ body::before {
   padding: 3px 8px;
 }
 
+/* Collapse-tree toggle. Sits at the very left of the viewer header so
+   it stays reachable when the tree column is hidden. Same visual
+   treatment as other small icon-only chrome buttons in the dashboard. */
+.files-tree-toggle {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 3px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+}
+.files-tree-toggle:hover { color: var(--teal); border-color: var(--teal); }
+.files-tree-toggle svg { width: 14px; height: 14px; }
+
+/* When the tree is collapsed, drop the left column entirely so the
+   viewer takes the full width. We also remove the inter-column gap so
+   there's no leftover hairline. */
+.files.files--tree-collapsed {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+.files.files--tree-collapsed > .files-tree { display: none; }
+
 .files-tree-body {
   flex: 1;
   min-height: 0;
@@ -2795,6 +2823,9 @@ body::before {
   .files.files--show-viewer .files-tree { display: none; }
   .files.files--show-viewer .files-viewer { display: flex; }
   .files.files--show-viewer .files-back { display: inline-block; }
+  /* Mobile uses the show-tree / show-viewer swap pattern, so the
+     collapse toggle has no meaning here. Hide it. */
+  .files-tree-toggle { display: none; }
 }
 
 /* ===== mobile + pwa ===== */
