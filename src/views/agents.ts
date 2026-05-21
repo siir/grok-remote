@@ -73,7 +73,11 @@ export interface Folder {
   name: string;
   agentIds: string[];
   createdAt: string;
+  // System folders ("Archived") can't be deleted or renamed.
+  system?: boolean;
 }
+
+const ARCHIVED_FOLDER_ID = 'archived';
 
 export interface AgentsSidebarOptions {
   onSelect?: (id: string) => void;
@@ -92,20 +96,17 @@ export class AgentsSidebar {
   folders: Folder[];
   selectedId: string | null;
   pollHandle: ReturnType<typeof setInterval> | null;
-  showArchived: boolean;
   sortKey: string;
   search: string;
   collapsed: Set<string>;
 
   activeList: HTMLElement;
-  archivedList: HTMLElement;
   empty: HTMLElement;
   noMatch: HTMLElement;
   error: HTMLElement;
   newBtn: HTMLButtonElement;
   newFolderBtn: HTMLButtonElement;
   closeDrawerBtn: HTMLButtonElement;
-  archivedToggle: HTMLButtonElement;
   searchInput: HTMLInputElement;
   searchClearBtn: HTMLButtonElement;
   sortSelect: HTMLSelectElement;
@@ -137,14 +138,11 @@ export class AgentsSidebar {
     this.folders = [];
     this.selectedId = null;
     this.pollHandle = null;
-    this.showArchived = false;
     this.sortKey = loadSort();
     this.search  = loadSearch();
     this.collapsed = loadCollapsed();
 
-    this.activeList   = el('div', { class: 'agents-list' }) as HTMLElement;
-    this.archivedList = el('div', { class: 'agents-list agents-list--archived' }) as HTMLElement;
-    this.archivedList.hidden = true;
+    this.activeList = el('div', { class: 'agents-list' }) as HTMLElement;
 
     this.empty = el('div', { class: 'agents-empty' }, 'no agents yet') as HTMLElement;
     this.noMatch = el('div', { class: 'agents-empty' }, 'no conversations match your search') as HTMLElement;
@@ -171,12 +169,6 @@ export class AgentsSidebar {
       'aria-label': 'close menu',
       onclick: () => document.dispatchEvent(new CustomEvent('grok-remote:close-drawer')),
     }, '×') as HTMLButtonElement;
-
-    this.archivedToggle = el('button', {
-      class: 'agents-archived-toggle',
-      type: 'button',
-      onclick: () => this.toggleArchivedView(),
-    }, 'archived (0)') as HTMLButtonElement;
 
     this.searchInput = el('input', {
       class: 'sidebar-search-input',
@@ -237,10 +229,6 @@ export class AgentsSidebar {
       this.error,
       el('div', { class: 'sidebar-body' },
         this.activeList,
-        el('div', { class: 'agents-archived' },
-          this.archivedToggle,
-          this.archivedList,
-        ),
       ),
     ) as HTMLElement;
   }
@@ -260,12 +248,6 @@ export class AgentsSidebar {
     return (a.name || '').toLowerCase().includes(needle)
         || (a.id || '').toLowerCase().includes(needle)
         || (a.model || '').toLowerCase().includes(needle);
-  }
-
-  toggleArchivedView(): void {
-    this.showArchived = !this.showArchived;
-    this.archivedList.hidden = !this.showArchived;
-    this.renderArchivedToggle();
   }
 
   async spawnNew(): Promise<void> {
@@ -426,33 +408,21 @@ export class AgentsSidebar {
     }
   }
 
-  renderArchivedToggle(count?: number): void {
-    const n = (typeof count === 'number')
-      ? count
-      : this.agents.filter((a) => a.archived).length;
-    const label = n === 0 ? 'archived (0)' : `${this.showArchived ? '▼' : '▶'} archived (${n})`;
-    this.archivedToggle.textContent = label;
-    this.archivedToggle.disabled = n === 0;
-  }
-
   renderList(errorMessage?: string): void {
     this.activeList.replaceChildren();
-    this.archivedList.replaceChildren();
     if (this.searchClearBtn) this.searchClearBtn.hidden = !this.search;
 
     if (errorMessage) {
       this.activeList.appendChild(el('div', { class: 'agents-empty agents-empty--err' },
         'backend unreachable'));
-      this.renderArchivedToggle();
       return;
     }
 
-    const allActive   = this.agents.filter((a) => !a.archived);
-    const allArchived = this.agents.filter((a) =>  a.archived);
-    const active   = this._sortAgents(allActive).filter((a) => this._matchesSearch(a));
-    const archived = this._sortAgents(allArchived).filter((a) => this._matchesSearch(a));
+    const visible = this._sortAgents(this.agents).filter((a) => this._matchesSearch(a));
 
-    // Bucket active agents by folder id.
+    // Bucket every visible agent by folder id. The system "Archived" folder
+    // collects every archived agent automatically (the backend assigns them
+    // when the archived flag flips).
     const folderById = new Map<string, Folder>();
     for (const f of this.folders) folderById.set(f.id, f);
     const folderOfAgent = new Map<string, string>();
@@ -460,7 +430,7 @@ export class AgentsSidebar {
 
     const topLevel: Agent[] = [];
     const buckets = new Map<string, Agent[]>();
-    for (const a of active) {
+    for (const a of visible) {
       const fid = folderOfAgent.get(a.id);
       if (fid && folderById.has(fid)) {
         if (!buckets.has(fid)) buckets.set(fid, []);
@@ -470,36 +440,40 @@ export class AgentsSidebar {
       }
     }
 
-    if (!allActive.length) {
+    if (!this.agents.length) {
       this.activeList.appendChild(this.empty);
-    } else if (!active.length && this.folders.length === 0) {
-      this.activeList.appendChild(this.noMatch);
-    } else {
-      // Top-level group only shows when there are folders OR there are items.
-      if (this.folders.length > 0) {
-        this.activeList.appendChild(this.renderGroup(TOP_LEVEL_ID, 'top level', topLevel, null));
-        for (const f of this.folders) {
-          this.activeList.appendChild(this.renderGroup(f.id, f.name, buckets.get(f.id) || [], f));
-        }
-      } else {
-        for (const a of topLevel) this.activeList.appendChild(this.renderItem(a, false));
-      }
+      return;
     }
-    for (const a of archived) this.archivedList.appendChild(this.renderItem(a, true));
+    if (!visible.length && this.folders.length === 0) {
+      this.activeList.appendChild(this.noMatch);
+      return;
+    }
 
-    this.renderArchivedToggle(allArchived.length);
+    if (this.folders.length > 0) {
+      this.activeList.appendChild(this.renderGroup(TOP_LEVEL_ID, 'top level', topLevel, null));
+      for (const f of this.folders) {
+        this.activeList.appendChild(this.renderGroup(f.id, f.name, buckets.get(f.id) || [], f));
+      }
+    } else {
+      for (const a of topLevel) this.activeList.appendChild(this.renderItem(a, false));
+    }
   }
 
   private renderGroup(groupId: string, label: string, items: Agent[], folder: Folder | null): HTMLElement {
     const isTopLevel = groupId === TOP_LEVEL_ID;
-    const isCollapsed = this.collapsed.has(groupId);
+    const isSystem = !!(folder && folder.system);
+    const isArchived = folder?.id === ARCHIVED_FOLDER_ID;
+    // System (archived) folders auto-collapse by default until the user toggles them.
+    const isCollapsed = isArchived
+      ? !this.collapsed.has(`open:${groupId}`)
+      : this.collapsed.has(groupId);
     const folderId = isTopLevel ? null : groupId;
 
     const caret = el('span', { class: 'folder-caret' }, isCollapsed ? '▶' : '▼');
     const labelEl = el('span', { class: 'folder-name' }, label);
     const count = el('span', { class: 'folder-count' }, String(items.length));
 
-    const deleteBtn = !isTopLevel ? el('button', {
+    const deleteBtn = (!isTopLevel && !isSystem) ? el('button', {
       class: 'folder-delete',
       type: 'button',
       title: 'delete folder (agents move back to top level)',
@@ -518,15 +492,21 @@ export class AgentsSidebar {
     }, '×') as HTMLButtonElement : null;
 
     const header = el('div', {
-      class: `folder-header${isTopLevel ? ' folder-header--top' : ''}`,
+      class: `folder-header${isTopLevel ? ' folder-header--top' : ''}${isSystem ? ' folder-header--system' : ''}`,
       'data-folder-id': groupId,
       onclick: () => {
-        if (isCollapsed) this.collapsed.delete(groupId); else this.collapsed.add(groupId);
+        if (isArchived) {
+          // Inverse key so the default state is collapsed.
+          const k = `open:${groupId}`;
+          if (this.collapsed.has(k)) this.collapsed.delete(k); else this.collapsed.add(k);
+        } else {
+          if (isCollapsed) this.collapsed.delete(groupId); else this.collapsed.add(groupId);
+        }
         saveCollapsed(this.collapsed);
         this.renderList();
       },
       ondblclick: (ev: MouseEvent) => {
-        if (isTopLevel || !folder) return;
+        if (isTopLevel || isSystem || !folder) return;
         ev.preventDefault();
         ev.stopPropagation();
         this.beginInlineRenameFolder(folder, labelEl as HTMLElement);

@@ -16,6 +16,7 @@ import {
   updateFolder,
   removeFolder,
   assignAgentToFolder,
+  setArchivedForAgent,
 } from './lib/folders.js';
 import { startRetentionTimer } from './lib/retention.js';
 import { inferDevServerUrl } from './lib/dev-url.js';
@@ -436,8 +437,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: string,
     }
     if (suffix === '' && method === 'PATCH') {
       try {
-        const body = await readJsonBody(req);
-        const out = await manager.update(id, (body || {}) as never);
+        const body = (await readJsonBody(req) || {}) as Record<string, unknown>;
+        const out = await manager.update(id, body as never);
+        // Side-effect: archive toggles also move the agent into / out of the
+        // system "Archived" folder so the sidebar shows one canonical location.
+        if (typeof body['archived'] === 'boolean') {
+          try { setArchivedForAgent(id, body['archived'] as boolean); }
+          catch { /* folder side-effect should never fail the patch response */ }
+        }
         sendJson(res, 200, out);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

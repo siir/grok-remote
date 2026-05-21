@@ -27,16 +27,28 @@ function setHome(dir: string): void {
   process.env['USERPROFILE'] = dir;
 }
 
+// Filter out the auto-seeded system folders (currently just "Archived") so
+// assertions can focus on user-created folders without restating the invariant
+// at every call site.
+function userFolders<T extends { system?: boolean }>(list: T[]): T[] {
+  return list.filter((f) => !f.system);
+}
+
 function restoreHome(): void {
   if (ORIGINAL_HOME == null) delete process.env['HOME']; else process.env['HOME'] = ORIGINAL_HOME;
   if (ORIGINAL_USERPROFILE == null) delete process.env['USERPROFILE']; else process.env['USERPROFILE'] = ORIGINAL_USERPROFILE;
 }
 
-test('listFolders returns an empty array when the file is missing', async () => {
+test('listFolders returns only the auto-seeded archived folder when no user folders exist', async () => {
   setHome(newHome());
   try {
     const m = await freshModule();
-    assert.deepEqual(m.listFolders(), []);
+    const list = m.listFolders();
+    assert.deepEqual(userFolders(list), []);
+    // The system "Archived" folder is always present, anchored at the end.
+    assert.equal(list.length, 1);
+    assert.equal(list[0]!.id, 'archived');
+    assert.equal(list[0]!.system, true);
   } finally {
     restoreHome();
   }
@@ -50,7 +62,7 @@ test('createFolder persists a new folder with a trimmed name and id', async () =
     assert.equal(f.name, 'research');
     assert.ok(f.id.startsWith('fld_'));
     assert.deepEqual(f.agentIds, []);
-    const after = m.listFolders();
+    const after = userFolders(m.listFolders());
     assert.equal(after.length, 1);
     assert.equal(after[0]!.id, f.id);
   } finally {
@@ -99,8 +111,57 @@ test('removeFolder drops the folder and returns false on second delete', async (
     const m = await freshModule();
     const f = m.createFolder('temp');
     assert.equal(m.removeFolder(f.id), true);
-    assert.deepEqual(m.listFolders(), []);
+    assert.deepEqual(userFolders(m.listFolders()), []);
     assert.equal(m.removeFolder(f.id), false);
+  } finally {
+    restoreHome();
+  }
+});
+
+test('removeFolder refuses to delete the system archived folder', async () => {
+  setHome(newHome());
+  try {
+    const m = await freshModule();
+    assert.throws(() => m.removeFolder('archived'), /cannot delete system folder/);
+    // Still present after the attempted delete.
+    assert.ok(m.listFolders().some((f) => f.id === 'archived' && f.system));
+  } finally {
+    restoreHome();
+  }
+});
+
+test('updateFolder refuses to rename the system archived folder', async () => {
+  setHome(newHome());
+  try {
+    const m = await freshModule();
+    assert.throws(() => m.updateFolder('archived', { name: 'Renamed' }), /cannot rename system folder/);
+  } finally {
+    restoreHome();
+  }
+});
+
+test('createFolder rejects the reserved Archived name', async () => {
+  setHome(newHome());
+  try {
+    const m = await freshModule();
+    assert.throws(() => m.createFolder('Archived'), /folder name reserved/);
+    assert.throws(() => m.createFolder('archived'), /folder name reserved/);
+  } finally {
+    restoreHome();
+  }
+});
+
+test('setArchivedForAgent moves an agent into and out of the archived folder', async () => {
+  setHome(newHome());
+  try {
+    const m = await freshModule();
+    m.setArchivedForAgent('agent-1', true);
+    const archived = m.listFolders().find((f) => f.id === 'archived')!;
+    assert.deepEqual(archived.agentIds, ['agent-1']);
+
+    m.setArchivedForAgent('agent-1', false);
+    const after = m.listFolders().find((f) => f.id === 'archived')!;
+    assert.deepEqual(after.agentIds, []);
   } finally {
     restoreHome();
   }
@@ -189,7 +250,7 @@ test('list/create round-trip survives a fresh module load (persistence)', async 
     const m1 = await freshModule();
     const f = m1.createFolder('persisted');
     const m2 = await freshModule();
-    const after = m2.listFolders();
+    const after = userFolders(m2.listFolders());
     assert.equal(after.length, 1);
     assert.equal(after[0]!.id, f.id);
     assert.equal(after[0]!.name, 'persisted');

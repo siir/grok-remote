@@ -10,10 +10,33 @@ export interface Folder {
   name: string;
   agentIds: string[];
   createdAt: string;
+  // System folders can't be deleted or renamed (currently just "Archived").
+  system?: boolean;
 }
 
 interface FoldersFile {
   folders: Folder[];
+}
+
+// The auto-managed folder archived agents land in. Reserved id + name.
+export const ARCHIVED_FOLDER_ID = 'archived';
+export const ARCHIVED_FOLDER_NAME = 'Archived';
+
+function makeArchivedFolder(agentIds: string[] = []): Folder {
+  return {
+    id: ARCHIVED_FOLDER_ID,
+    name: ARCHIVED_FOLDER_NAME,
+    agentIds,
+    createdAt: '1970-01-01T00:00:00.000Z',
+    system: true,
+  };
+}
+
+// Sort the archived folder to the end so user folders stay on top.
+function withArchivedLast(folders: Folder[]): Folder[] {
+  const archived = folders.find((f) => f.id === ARCHIVED_FOLDER_ID);
+  const others = folders.filter((f) => f.id !== ARCHIVED_FOLDER_ID);
+  return archived ? [...others, archived] : others;
 }
 
 function root(): string {
@@ -30,14 +53,24 @@ function ensureRoot(): void {
 
 function readAll(): FoldersFile {
   ensureRoot();
+  let folders: Folder[] = [];
   try {
     const raw = fs.readFileSync(file(), 'utf8');
     const parsed = JSON.parse(raw) as Partial<FoldersFile>;
-    const folders = Array.isArray(parsed.folders) ? parsed.folders : [];
-    return { folders: folders.filter(isValidFolder).map(normalizeFolder) };
-  } catch {
-    return { folders: [] };
+    const list = Array.isArray(parsed.folders) ? parsed.folders : [];
+    folders = list.filter(isValidFolder).map(normalizeFolder);
+  } catch { /* missing or unreadable: start empty */ }
+  // The archived folder is auto-managed: stamp it on every read so callers
+  // never see a state where it's missing, even if the on-disk file was hand-
+  // edited or hasn't been written yet.
+  const existing = folders.find((f) => f.id === ARCHIVED_FOLDER_ID);
+  if (existing) {
+    existing.name = ARCHIVED_FOLDER_NAME;
+    existing.system = true;
+  } else {
+    folders.push(makeArchivedFolder());
   }
+  return { folders: withArchivedLast(folders) };
 }
 
 function writeAll(data: FoldersFile): void {
@@ -55,12 +88,14 @@ function isValidFolder(f: unknown): f is Folder {
 }
 
 function normalizeFolder(f: Folder): Folder {
-  return {
+  const out: Folder = {
     id: f.id,
     name: String(f.name).slice(0, 200),
     agentIds: Array.from(new Set(f.agentIds.filter((x) => typeof x === 'string'))),
     createdAt: f.createdAt,
   };
+  if (f.system === true) out.system = true;
+  return out;
 }
 
 function nowIso(): string {
@@ -76,9 +111,18 @@ export function listFolders(): Folder[] {
   return readAll().folders.slice();
 }
 
+// Move (or remove) an agent into the archived system folder.
+export function setArchivedForAgent(agentId: string, archived: boolean): Folder | null {
+  return assignAgentToFolder(agentId, archived ? ARCHIVED_FOLDER_ID : null);
+}
+
 export function createFolder(name: string): Folder {
   const trimmed = String(name ?? '').trim();
   if (!trimmed) throw new Error('folder name required');
+  // Reserve the archived name so user folders don't shadow the system one.
+  if (trimmed.toLowerCase() === ARCHIVED_FOLDER_NAME.toLowerCase()) {
+    throw new Error('folder name reserved');
+  }
   const data = readAll();
   const folder: Folder = {
     id: newId(),
@@ -105,6 +149,7 @@ export function updateFolder(id: string, patch: FolderPatch): Folder {
   const cur = data.folders[idx]!;
   const next: Folder = { ...cur };
   if (typeof patch.name === 'string') {
+    if (cur.system) throw new Error('cannot rename system folder');
     const trimmed = patch.name.trim();
     if (!trimmed) throw new Error('folder name required');
     next.name = trimmed.slice(0, 200);
@@ -131,6 +176,7 @@ export function updateFolder(id: string, patch: FolderPatch): Folder {
 
 export function removeFolder(id: string): boolean {
   if (!id || typeof id !== 'string') throw new Error('folder id required');
+  if (id === ARCHIVED_FOLDER_ID) throw new Error('cannot delete system folder');
   const data = readAll();
   const before = data.folders.length;
   data.folders = data.folders.filter((f) => f.id !== id);
