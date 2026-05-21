@@ -506,6 +506,18 @@ export class ChatView {
     }
   }
 
+  // Reset the chat view to the baseline used for a freshly-created
+  // conversation: conversation tab active, tools sidebar collapsed.
+  // Wired into AgentsSidebar.onCreate from main.js. Called BEFORE the
+  // route handler runs setAgent for the new id, but neither tabsState
+  // nor the split state is reset by setAgent, so this sticks.
+  beginNewConversation() {
+    this.switchTab('conversation');
+    if (!this._isChatMobile() && !this._chatSplitCollapsed) {
+      this._toggleToolsCol();
+    }
+  }
+
   buildComposer() {
     const ta = el('textarea', {
       class: 'composer-input',

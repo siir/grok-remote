@@ -174,7 +174,7 @@ function mountDashboard() {
   const settings = new SettingsView();
   const sidebar  = new AgentsSidebar({
     onSelect: (id) => navigate(`#/agents/${encodeURIComponent(id)}`),
-    onCreate: () => {},
+    onCreate: () => { chat.beginNewConversation(); },
     onDelete: (id) => {
       if (currentAgent && currentAgent.id === id) {
         currentAgent = null;
