@@ -22,9 +22,9 @@ const docDataset: Record<string, string> = {};
 
 const themes = await import('../src/lib/themes.js');
 
-test('THEMES exposes the four known themes', () => {
+test('THEMES exposes the registered themes', () => {
   const names = themes.THEMES.map((t) => t.name).sort();
-  assert.deepEqual(names, ['dark', 'hacker', 'light', 'unicorn']);
+  assert.deepEqual(names, ['aurora', 'dark', 'hacker', 'light', 'nebula', 'sunset', 'unicorn']);
 });
 
 test('getTheme returns the default when no value is stored', () => {
@@ -71,7 +71,10 @@ test('nextTheme cycles through the registry in declaration order', () => {
   assert.equal(themes.nextTheme('dark'),    'light');
   assert.equal(themes.nextTheme('light'),   'hacker');
   assert.equal(themes.nextTheme('hacker'),  'unicorn');
-  assert.equal(themes.nextTheme('unicorn'), 'dark');
+  assert.equal(themes.nextTheme('unicorn'), 'nebula');
+  assert.equal(themes.nextTheme('nebula'),  'aurora');
+  assert.equal(themes.nextTheme('aurora'),  'sunset');
+  assert.equal(themes.nextTheme('sunset'),  'dark');
 });
 
 test('getThemeMeta returns the matching theme record', () => {

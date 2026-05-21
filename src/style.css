@@ -3293,6 +3293,158 @@ body::before {
   color: var(--teal);
 }
 
+/* nebula: deep indigo with cyan-to-magenta gradient accents (the "cosmic" look). */
+[data-theme="nebula"] {
+  --bg:        #0a0814;
+  --bg-soft:   #0e0a1c;
+  --panel:     #141127;
+  --panel-2:   #1b1530;
+  --border:    #2a234a;
+  --border-2:  #3d3268;
+  --text:      #e4e0f5;
+  --muted:     #9d94c2;
+  --dim:       #5c5278;
+  --teal:      #7dd3fc;
+  --blue:      #a78bfa;
+  --green:     #34d399;
+  --amber:     #fbbf24;
+  --red:       #fb7185;
+  --grad-1:    #22d3ee;
+  --grad-2:    #c084fc;
+}
+[data-theme="nebula"] body::before {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%,   rgba(34, 211, 238, 0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 30%,  rgba(192, 132, 252, 0.10) 0%, transparent 65%),
+    radial-gradient(ellipse 70% 50% at 10% 100%, rgba(167, 139, 250, 0.08) 0%, transparent 60%);
+}
+[data-theme="nebula"] .scanlines { display: none; }
+[data-theme="nebula"] .figlet {
+  filter: drop-shadow(0 0 14px rgba(167, 139, 250, 0.35));
+  background: linear-gradient(90deg, #22d3ee 0%, #a78bfa 50%, #c084fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="nebula"] .brand-name {
+  background: linear-gradient(90deg, #22d3ee 0%, #c084fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="nebula"] .brand-dot {
+  background: linear-gradient(135deg, #22d3ee, #c084fc);
+  box-shadow: 0 0 14px rgba(167, 139, 250, 0.55);
+}
+[data-theme="nebula"] .md-inline-code {
+  background: rgba(167, 139, 250, 0.12);
+  color: #c4b5fd;
+}
+[data-theme="nebula"] .btn--primary {
+  background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+  border-color: #7c3aed;
+  color: #fff;
+}
+[data-theme="nebula"] .btn--primary:hover {
+  background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+}
+
+/* aurora: midnight teal with green-to-blue northern-lights glow. */
+[data-theme="aurora"] {
+  --bg:        #06121a;
+  --bg-soft:   #081820;
+  --panel:     #0b2230;
+  --panel-2:   #0f2c3c;
+  --border:    #163f54;
+  --border-2:  #1f5670;
+  --text:      #d8f3ec;
+  --muted:     #7fb4a3;
+  --dim:       #486870;
+  --teal:      #34d399;
+  --blue:      #38bdf8;
+  --green:     #4ade80;
+  --amber:     #fbbf24;
+  --red:       #f87171;
+  --grad-1:    #34d399;
+  --grad-2:    #38bdf8;
+}
+[data-theme="aurora"] body::before {
+  background:
+    radial-gradient(ellipse 50% 30% at 20% 0%,  rgba(52, 211, 153, 0.15) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 25% at 75% 0%,  rgba(56, 189, 248, 0.13) 0%, transparent 60%),
+    radial-gradient(ellipse 80% 40% at 50% 100%, rgba(99, 102, 241, 0.08) 0%, transparent 65%);
+}
+[data-theme="aurora"] .scanlines { display: none; }
+[data-theme="aurora"] .figlet {
+  filter: drop-shadow(0 0 14px rgba(52, 211, 153, 0.35));
+  background: linear-gradient(90deg, #34d399 0%, #38bdf8 50%, #818cf8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="aurora"] .brand-name {
+  background: linear-gradient(90deg, #34d399 0%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="aurora"] .brand-dot {
+  background: linear-gradient(135deg, #34d399, #38bdf8);
+  box-shadow: 0 0 14px rgba(52, 211, 153, 0.55);
+}
+[data-theme="aurora"] .md-inline-code {
+  background: rgba(52, 211, 153, 0.12);
+  color: #6ee7b7;
+}
+
+/* sunset: dusk plum with coral-to-amber accent glow. */
+[data-theme="sunset"] {
+  --bg:        #150c14;
+  --bg-soft:   #1a0f1a;
+  --panel:     #221624;
+  --panel-2:   #2b1c2e;
+  --border:    #432a44;
+  --border-2:  #5b3a5e;
+  --text:      #f5e4e8;
+  --muted:     #c0a0aa;
+  --dim:       #6e4d59;
+  --teal:      #fb7185;
+  --blue:      #c084fc;
+  --green:     #fcd34d;
+  --amber:     #fb923c;
+  --red:       #f43f5e;
+  --grad-1:    #fb7185;
+  --grad-2:    #fb923c;
+}
+[data-theme="sunset"] body::before {
+  background:
+    radial-gradient(ellipse 70% 45% at 50% 0%,   rgba(251, 113, 133, 0.12) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 35% at 100% 30%, rgba(251, 146, 60, 0.10) 0%, transparent 65%),
+    radial-gradient(ellipse 60% 40% at 0% 100%,  rgba(192, 132, 252, 0.06) 0%, transparent 60%);
+}
+[data-theme="sunset"] .scanlines { display: none; }
+[data-theme="sunset"] .figlet {
+  filter: drop-shadow(0 0 14px rgba(251, 113, 133, 0.35));
+  background: linear-gradient(90deg, #fb7185 0%, #fb923c 50%, #fcd34d 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="sunset"] .brand-name {
+  background: linear-gradient(90deg, #fb7185 0%, #fb923c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="sunset"] .brand-dot {
+  background: linear-gradient(135deg, #fb7185, #fb923c);
+  box-shadow: 0 0 14px rgba(251, 113, 133, 0.50);
+}
+[data-theme="sunset"] .md-inline-code {
+  background: rgba(251, 113, 133, 0.12);
+  color: #fda4af;
+}
+
 /* ===== topbar theme toggle ===== */
 /* Topbar bg-process counter */
 .topbar-bg {

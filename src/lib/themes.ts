@@ -18,7 +18,7 @@ export interface Theme {
   swatch: string;
 }
 
-export type ThemeName = 'dark' | 'light' | 'hacker' | 'unicorn';
+export type ThemeName = 'dark' | 'light' | 'hacker' | 'unicorn' | 'nebula' | 'aurora' | 'sunset';
 
 export const THEMES: Theme[] = [
   {
@@ -48,6 +48,27 @@ export const THEMES: Theme[] = [
     blurb:   'pastel rainbow on a lavender-tinted backdrop',
     accent:  '#ff6ec7',
     swatch:  '#f9f7ff',
+  },
+  {
+    name:    'nebula',
+    label:   'nebula',
+    blurb:   'deep indigo with cyan-to-magenta gradient accents',
+    accent:  '#a78bfa',
+    swatch:  '#0a0814',
+  },
+  {
+    name:    'aurora',
+    label:   'aurora',
+    blurb:   'midnight teal with green-to-blue northern-lights glow',
+    accent:  '#34d399',
+    swatch:  '#06121a',
+  },
+  {
+    name:    'sunset',
+    label:   'sunset',
+    blurb:   'dusk plum with coral-to-amber accent glow',
+    accent:  '#fb7185',
+    swatch:  '#150c14',
   },
 ];
 
