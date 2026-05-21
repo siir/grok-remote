@@ -2,6 +2,8 @@
 // run `grok mcp doctor` against one or all of them.
 
 import { api } from '../../lib/api.js';
+import { MCP_REGISTRY, MCP_CATEGORIES, type McpRegistryEntry } from './mcp-registry.js';
+import { openRegistryPicker, type RegistryPickEntry } from './registry-picker.js';
 
 interface McpServer {
   name?: string;
@@ -86,6 +88,7 @@ function render(): void {
     <header class="mcp-header">
       <h2 class="system-page-title">MCP servers</h2>
       <div class="mcp-header-actions">
+        <button type="button" class="mcp-btn" data-act="browse-registry">browse registry</button>
         <button type="button" class="mcp-btn" data-act="refresh">refresh</button>
         <button type="button" class="mcp-btn mcp-btn--accent" data-act="doctor-all">doctor all</button>
       </div>
@@ -154,6 +157,9 @@ function render(): void {
   });
   root.querySelector<HTMLButtonElement>('[data-act="doctor-all"]')?.addEventListener('click', () => {
     void runDoctorAll();
+  });
+  root.querySelector<HTMLButtonElement>('[data-act="browse-registry"]')?.addEventListener('click', () => {
+    openMcpRegistryPicker();
   });
 
   const form = root.querySelector<HTMLFormElement>('[data-slot="form"]');
@@ -549,4 +555,78 @@ function renderDoctorAll(): void {
     out.textContent = formatJson(state.doctorAllResult);
   }
   slot.appendChild(out);
+}
+
+function openMcpRegistryPicker(): void {
+  const entries: RegistryPickEntry[] = MCP_REGISTRY.map(e => ({
+    slug: e.slug,
+    name: e.name,
+    description: e.description,
+    group: e.category,
+    tags: [e.transport],
+    official: e.official,
+    envHints: (e.env || []).map(v => `${v.required ? 'required' : 'optional'} env: ${v.name}${v.placeholder ? ` (${v.placeholder})` : ''}`),
+    docsUrl: e.url_docs,
+  }));
+  openRegistryPicker({
+    title: 'MCP server registry',
+    groupLabel: 'category',
+    entries,
+    groupOrder: MCP_CATEGORIES,
+    closeAfterAdd: true,
+    onAdd: (slug) => {
+      const entry = MCP_REGISTRY.find(e => e.slug === slug);
+      if (entry) prefillMcpForm(entry);
+    },
+  });
+}
+
+function prefillMcpForm(entry: McpRegistryEntry): void {
+  if (!activeContainer) return;
+  const form = activeContainer.querySelector<HTMLFormElement>('[data-slot="form"]');
+  if (!form) return;
+
+  state.formType = entry.transport;
+  state.formError = null;
+
+  const nameInput = form.querySelector<HTMLInputElement>('input[name="name"]');
+  if (nameInput) nameInput.value = entry.slug;
+
+  const radio = form.querySelector<HTMLInputElement>(`input[name="type"][value="${entry.transport}"]`);
+  if (radio) radio.checked = true;
+
+  const commandInput = form.querySelector<HTMLInputElement>('input[name="command"]');
+  const argsArea = form.querySelector<HTMLTextAreaElement>('textarea[name="args"]');
+  const envArea = form.querySelector<HTMLTextAreaElement>('textarea[name="env"]');
+  const urlInput = form.querySelector<HTMLInputElement>('input[name="url"]');
+
+  if (entry.transport === 'stdio') {
+    if (commandInput) commandInput.value = entry.command || '';
+    if (argsArea) argsArea.value = (entry.args || []).join('\n');
+    if (envArea) {
+      const lines = (entry.env || []).map(v => `${v.name}=`);
+      envArea.value = lines.join('\n');
+    }
+  } else {
+    if (urlInput) urlInput.value = entry.url || '';
+  }
+
+  syncFormVisibility(form);
+
+  const target = entry.transport === 'stdio'
+    ? (entry.env && entry.env.length ? envArea : commandInput)
+    : urlInput;
+  queueMicrotask(() => {
+    if (target instanceof HTMLTextAreaElement) {
+      target.focus();
+      const pos = target.value.indexOf('=');
+      if (pos >= 0) {
+        const cursor = pos + 1;
+        target.setSelectionRange(cursor, cursor);
+      }
+    } else if (target instanceof HTMLInputElement) {
+      target.focus();
+    }
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }

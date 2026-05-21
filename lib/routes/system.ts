@@ -3,6 +3,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import * as mcpRoutes        from './system/mcp.js';
+import * as lspRoutes        from './system/lsp.js';
 import * as leadersRoutes    from './system/leaders.js';
 import * as worktreesRoutes  from './system/worktrees.js';
 import * as memoryRoutes     from './system/memory.js';
@@ -40,6 +41,7 @@ function add(method: string, path: string, handler: RouteHandler): void {
 
 const REGISTRARS: RouteModule[] = [
   mcpRoutes as RouteModule,
+  lspRoutes as RouteModule,
   leadersRoutes as RouteModule,
   worktreesRoutes as RouteModule,
   memoryRoutes as RouteModule,

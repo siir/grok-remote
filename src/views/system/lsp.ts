@@ -7,6 +7,9 @@ import {
   shortenPath, scopeLabel,
   type ConfigFile,
 } from './_native_common.js';
+import { api } from '../../lib/api.js';
+import { LSP_REGISTRY, type LspRegistryEntry } from './lsp-registry.js';
+import { openRegistryPicker, type RegistryPickEntry } from './registry-picker.js';
 
 interface LspSource { type?: string; path?: string; plugin_name?: string }
 interface LspServer {
@@ -43,6 +46,7 @@ export async function mount(container: HTMLElement): Promise<void> {
   activeContainer = container;
   aborted = false;
   const section = buildPageShell(container, { title: 'LSP servers', blurb: BLURB });
+  addToolbar(section);
   await reload(section);
 }
 
@@ -52,6 +56,33 @@ export function unmount(): void {
     activeContainer.replaceChildren();
     activeContainer = null;
   }
+}
+
+function addToolbar(section: HTMLElement): void {
+  const header = section.querySelector('.system-page-header');
+  if (!header) return;
+  const prev = header.querySelector('[data-slot="lsp-toolbar"]');
+  if (prev) prev.remove();
+  const toolbar = document.createElement('div');
+  toolbar.className = 'mcp-header-actions';
+  toolbar.dataset['slot'] = 'lsp-toolbar';
+  toolbar.style.marginTop = '8px';
+
+  const browse = document.createElement('button');
+  browse.type = 'button';
+  browse.className = 'mcp-btn';
+  browse.textContent = 'browse registry';
+  browse.addEventListener('click', () => openLspRegistryPicker(section));
+  toolbar.appendChild(browse);
+
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'mcp-btn';
+  refresh.textContent = 'refresh';
+  refresh.addEventListener('click', () => { void reload(section); });
+  toolbar.appendChild(refresh);
+
+  header.appendChild(toolbar);
 }
 
 async function reload(section: HTMLElement): Promise<void> {
@@ -72,7 +103,7 @@ async function reload(section: HTMLElement): Promise<void> {
   if (!items.length) {
     section.appendChild(emptyState({
       message: 'no LSP servers configured.',
-      hint: 'add one under [[lsp]] in ~/.grok/config.toml',
+      hint: 'add one from the registry or edit ~/.grok/config.toml',
     }));
     section.appendChild(buildFooterHint(
       'Starter snippet: ' +
@@ -96,8 +127,47 @@ async function reload(section: HTMLElement): Promise<void> {
 
   section.appendChild(buildFooterHint(
     'Edits land in <code>config.toml</code> under <code>[[lsp]]</code>. ' +
-    'Use the per-entry copy buttons to grab a TOML snippet you can drop in.',
+    'Use "browse registry" above to add a server with one click.',
   ));
+}
+
+function openLspRegistryPicker(section: HTMLElement): void {
+  const entries: RegistryPickEntry[] = LSP_REGISTRY.map(e => ({
+    slug: e.slug,
+    name: e.name,
+    description: e.description,
+    group: e.language,
+    tags: e.install_hint ? ['install: ' + e.install_hint] : undefined,
+    official: e.official,
+    docsUrl: e.url_docs,
+  }));
+  openRegistryPicker({
+    title: 'LSP server registry',
+    groupLabel: 'language',
+    entries,
+    closeAfterAdd: true,
+    onAdd: (slug) => {
+      const entry = LSP_REGISTRY.find(e => e.slug === slug);
+      if (entry) void addFromRegistry(entry, section);
+    },
+  });
+}
+
+async function addFromRegistry(entry: LspRegistryEntry, section: HTMLElement): Promise<void> {
+  setStatusLine(section, `adding ${entry.name}...`);
+  try {
+    await api.lsp.add({
+      language: entry.language,
+      command: entry.command,
+      args: entry.args,
+      root_markers: entry.root_markers,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setStatusLine(section, `failed to add ${entry.name}: ${msg}`);
+    return;
+  }
+  await reload(section);
 }
 
 function makeLspCard(s: LspServer): HTMLElement {

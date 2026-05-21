@@ -136,6 +136,10 @@ export const api = {
                                               : '/api/system/mcp/doctor'),
   },
 
+  lsp: {
+    add: (body?: Record<string, unknown>): Promise<unknown> => request('POST', '/api/system/lsp/add', body || {}),
+  },
+
   memory: {
     get:         (): Promise<unknown>          => request('GET',  '/api/system/memory'),
     clear:       (scope: string): Promise<unknown> => request('POST', '/api/system/memory/clear', { scope }),
