@@ -21,10 +21,40 @@ function isValidPid(s: unknown): s is string {
   return typeof s === 'string' && /^[0-9]+$/.test(s);
 }
 
+// `grok leader list --json` returns records keyed by `pidFromLock` and a
+// `classification` field. The frontend table expects a `pid`. Map known
+// upstream aliases to the canonical names without dropping the original keys.
+export function normalizeLeader(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const pid = r['pid'] ?? r['pidFromLock'] ?? r['pid_from_lock'];
+  if (pid == null) return null;
+  return {
+    ...r,
+    pid,
+    classification: r['classification'] ?? null,
+    socketPath: r['socketPath'] ?? r['socket_path'] ?? null,
+  };
+}
+
+export function normalizeLeaderList(data: unknown): Record<string, unknown>[] {
+  const rows = Array.isArray(data)
+    ? data
+    : (data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>)['leaders']))
+      ? (data as { leaders: unknown[] }).leaders
+      : [];
+  const out: Record<string, unknown>[] = [];
+  for (const r of rows) {
+    const n = normalizeLeader(r);
+    if (n) out.push(n);
+  }
+  return out;
+}
+
 async function handleList(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    const data = await runGrokJson(['leader', 'list', '--json']);
-    send(res, 200, { ok: true, data });
+    const raw = await runGrokJson(['leader', 'list', '--json']);
+    send(res, 200, { ok: true, data: normalizeLeaderList(raw) });
   } catch (err) {
     send(res, 502, errorToResponse(err));
   }
@@ -37,7 +67,8 @@ async function handleInfo(_req: IncomingMessage, res: ServerResponse, _url: URL,
     return;
   }
   try {
-    const data = await runGrokJson(['leader', 'info', '--pid', pid, '--json']);
+    const raw = await runGrokJson(['leader', 'info', '--pid', pid, '--json']);
+    const data = normalizeLeader(raw) ?? raw;
     send(res, 200, { ok: true, data });
   } catch (err) {
     send(res, 502, errorToResponse(err));
