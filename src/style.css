@@ -494,11 +494,21 @@ body::before {
   font-size: 11px;
   min-height: 14px;
 }
+/* sidebar-body wraps the active list AND the archived disclosure so
+   they share a single scroll context. Both sections grow naturally;
+   the wrapper handles overflow. */
+.sidebar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .agents-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow-y: auto;
   min-height: 0;
 }
 .agents-empty {
@@ -8343,4 +8353,119 @@ body::before {
 .tab-actions-group .tab-action--icon-only .tab-action-ico svg {
   width: 13px;
   height: 13px;
+}
+
+/* ── TodoWrite card ──────────────────────────────────────────────────── */
+
+.tool-pill--todo {
+  border: 1px solid rgba(94, 234, 212, 0.25);
+  background: rgba(94, 234, 212, 0.04);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  margin: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.todo-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+}
+.todo-card__ico {
+  color: var(--teal);
+  font-size: 13px;
+}
+.todo-card__title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+  font-weight: 600;
+}
+.todo-card__summary {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.todo-card__spacer { flex: 1; }
+.todo-card__status {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.todo-card__status--running {
+  color: var(--teal);
+  border-color: rgba(94, 234, 212, 0.35);
+}
+.todo-card__status--done {
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+.todo-card__list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.todo-item {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: start;
+  gap: 8px;
+  padding: 4px 6px 4px 2px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+  transition: background 80ms ease, color 80ms ease;
+}
+.todo-item:hover { background: rgba(255, 255, 255, 0.02); }
+
+.todo-item__indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.todo-item__content {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.todo-item--pending .todo-item__indicator { color: var(--dim); }
+.todo-item--pending .todo-item__content   { color: var(--muted); }
+
+.todo-item--in-progress .todo-item__indicator { color: var(--amber); }
+.todo-item--in-progress .todo-item__content   { color: var(--text); font-weight: 500; }
+.todo-item--in-progress {
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.todo-item--completed .todo-item__indicator { color: var(--teal); }
+.todo-item--completed .todo-item__content {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(120, 120, 120, 0.4);
+}
+
+.todo-item--cancelled .todo-item__indicator,
+.todo-item--canceled  .todo-item__indicator { color: var(--rose); }
+.todo-item--cancelled .todo-item__content,
+.todo-item--canceled  .todo-item__content {
+  color: var(--dim);
+  text-decoration: line-through;
 }

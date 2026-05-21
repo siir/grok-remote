@@ -140,10 +140,16 @@ export class AgentsSidebar {
         this.sortSelect,
       ),
       this.error,
-      this.activeList,
-      el('div', { class: 'agents-archived' },
-        this.archivedToggle,
-        this.archivedList,
+      // sidebar-body is the single scrollable region so the active list
+      // AND the expanded archived section share one scrollbar. Without
+      // this wrapper, the archived disclosure would push past the
+      // viewport with nowhere to overflow.
+      el('div', { class: 'sidebar-body' },
+        this.activeList,
+        el('div', { class: 'agents-archived' },
+          this.archivedToggle,
+          this.archivedList,
+        ),
       ),
     );
   }

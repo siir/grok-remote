@@ -301,8 +301,17 @@ function inferToolTitle(update) {
   return 'tool call';
 }
 
+// Identify TodoWrite tool calls regardless of which event slot they
+// arrive on (initial tool_call, tool_call_update). grok sends
+// rawInput.variant === 'TodoWrite' for both the initial full list
+// (merge=false) and subsequent in-progress patches (merge=true).
+export function isTodoWriteToolCall(data) {
+  return !!(data && data.rawInput && data.rawInput.variant === 'TodoWrite');
+}
+
 export function renderToolCard(initial) {
   // initial is the `tool_call` update payload.
+  if (isTodoWriteToolCall(initial)) return renderTodoWriteCard(initial);
   const status = readStatus(initial) || 'Pending';
   const styleInfo = STATUS_STYLES[status] || STATUS_STYLES.Pending;
   const startedAt = Date.now();
@@ -421,6 +430,117 @@ export function renderToolCard(initial) {
   }
 
   return { node, applyUpdate, appendDelta, getStatus: () => statusEl.textContent };
+}
+
+// Specialized card for the TodoWrite tool. Renders a clean checklist
+// with a small status indicator per row (pending / in-progress / done)
+// and a header that summarizes the overall progress. Holds its own
+// accumulated state across merge=true patches:
+//   - merge=false replaces the list with the provided todos.
+//   - merge=true patches existing entries by id (content may be null,
+//     in which case only the status is updated).
+//
+// Returns the standard tool-card shape so the chat view can treat
+// it identically to other cards.
+export function renderTodoWriteCard(initial) {
+  const startedAt = Date.now();
+  let endedAt = null;
+  // id -> { content, status }. Keys preserve insertion order so the
+  // list renders in the same order grok provided.
+  const todos = new Map();
+
+  const summaryEl = el('span', { class: 'todo-card__summary' }, '0/0');
+  const titleEl   = el('span', { class: 'todo-card__title' }, 'plan');
+  const statusEl  = el('span', { class: 'todo-card__status' }, 'running');
+  const head      = el('div', { class: 'todo-card__head' },
+    el('span', { class: 'todo-card__ico' }, '☑'),
+    titleEl,
+    summaryEl,
+    el('span', { class: 'todo-card__spacer' }),
+    statusEl,
+  );
+  const list = el('ol', { class: 'todo-card__list' });
+  const node = el('div', { class: 'tool-pill tool-pill--todo todo-card' }, head, list);
+
+  function statusGlyph(s) {
+    if (s === 'completed')   return '✓';
+    if (s === 'in_progress') return '◐';
+    if (s === 'cancelled' || s === 'canceled') return '×';
+    return '○';
+  }
+
+  function ingest(payload) {
+    const ri = payload && payload.rawInput;
+    if (!ri || !Array.isArray(ri.todos)) return;
+    const merge = !!ri.merge;
+    if (!merge) todos.clear();
+    for (const t of ri.todos) {
+      if (!t || t.id == null) continue;
+      const key = String(t.id);
+      const cur = todos.get(key) || { content: '', status: 'pending' };
+      if (t.content != null) cur.content = String(t.content);
+      if (t.status  != null) cur.status  = String(t.status);
+      todos.set(key, cur);
+    }
+  }
+
+  function render() {
+    let done = 0, inProgress = 0;
+    list.replaceChildren();
+    for (const [id, t] of todos) {
+      if (t.status === 'completed') done++;
+      else if (t.status === 'in_progress') inProgress++;
+      const item = el('li', {
+        class: `todo-item todo-item--${(t.status || 'pending').replace(/_/g, '-')}`,
+        dataset: { id },
+      },
+        el('span', { class: 'todo-item__indicator' }, statusGlyph(t.status)),
+        el('span', { class: 'todo-item__content' }, t.content || '(no description)'),
+      );
+      list.appendChild(item);
+    }
+    const total = todos.size;
+    summaryEl.textContent = inProgress
+      ? `${done}/${total} done · ${inProgress} in progress`
+      : `${done}/${total} done`;
+  }
+
+  function applyStatus(payload) {
+    const canonical = readStatus(payload);
+    if (!canonical) return;
+    if (canonical === 'Completed' || canonical === 'Failed' || canonical === 'Canceled') {
+      if (!endedAt) endedAt = Date.now();
+      statusEl.textContent = 'done';
+      statusEl.classList.remove('todo-card__status--running');
+      statusEl.classList.add('todo-card__status--done');
+    } else {
+      statusEl.textContent = 'running';
+      statusEl.classList.add('todo-card__status--running');
+      statusEl.classList.remove('todo-card__status--done');
+    }
+  }
+
+  function applyUpdate(payload) {
+    ingest(payload);
+    applyStatus(payload);
+    render();
+  }
+
+  // Seed from the initial payload.
+  ingest(initial);
+  applyStatus(initial);
+  render();
+
+  return {
+    node,
+    applyUpdate,
+    appendDelta: () => { /* TodoWrite uses rawInput, not delta chunks */ },
+    getStatus: () => statusEl.textContent,
+    // Custom hook used by chat.js to merge a follow-up TodoWrite tool
+    // call into this card instead of creating a sibling card.
+    ingestExternal: (payload) => { ingest(payload); applyStatus(payload); render(); },
+    isTodo: true,
+  };
 }
 
 export function renderTokenFooter(meta) {

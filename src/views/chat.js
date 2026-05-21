@@ -25,6 +25,8 @@ import {
   renderAssistantBubble,
   renderThinkingPane,
   renderToolCard,
+  renderTodoWriteCard,
+  isTodoWriteToolCall,
   renderTokenFooter,
   renderCompactedPill,
   renderErrorBanner,
@@ -523,17 +525,22 @@ export class ChatView {
     }
   }
 
-  // Reset the chat view to the baseline used for a freshly-created
-  // conversation: conversation tab active, tools sidebar collapsed.
-  // Wired into AgentsSidebar.onCreate from main.js. Called BEFORE the
-  // route handler runs setAgent for the new id, but neither tabsState
-  // nor the split state is reset by setAgent, so this sticks.
-  beginNewConversation() {
+  // Snap the chat view to the conversation tab with the tools sidebar
+  // collapsed. Called by main.js both on a freshly-created conversation
+  // (AgentsSidebar.onCreate) and on a sidebar selection
+  // (AgentsSidebar.onSelect) so picking any chat from the list always
+  // lands the user looking at the messages, not a leftover Files/Flow
+  // tab or a wide tools column from a previous agent.
+  focusConversation() {
     this.switchTab('conversation');
     if (!this._isChatMobile() && !this._chatSplitCollapsed) {
       this._toggleToolsCol();
     }
   }
+
+  // Back-compat alias for older call sites. New code should use
+  // focusConversation().
+  beginNewConversation() { this.focusConversation(); }
 
   buildComposer() {
     const ta = el('textarea', {
@@ -864,6 +871,7 @@ export class ChatView {
     const switchingAgent = this.agentId !== agent.id;
     if (switchingAgent) {
       this._clearAllInFlight();
+      this._activeTodoCard = null;
       this._stopBgTerminalsPolling();
       this._convoSkills = new Map();
       this._renderConvoSkillsStrip();
@@ -2223,7 +2231,69 @@ export class ChatView {
     this.scrollToBottom();
   }
 
+  // Coalesce TodoWrite tool calls so a checklist evolves in place
+  // instead of stacking a new pill per merge=true patch. Returns true
+  // when the call was absorbed (caller should NOT also create a pill).
+  //
+  // Rules:
+  //   - rawInput.merge === false (or no prior active card) → start a
+  //     fresh card. Falls through to the normal pill path; we just stash
+  //     the reference so later merges can find it.
+  //   - rawInput.merge === true and we have an active card → patch the
+  //     existing card and stop. No new pill, no strip chip.
+  _maybeRouteTodoToolCall(data, opts) {
+    if (!isTodoWriteToolCall(data)) return false;
+    const ri = data.rawInput || {};
+    const isMerge = !!ri.merge;
+
+    // Merge update with an active todo card already: absorb in place.
+    if (isMerge && this._activeTodoCard && typeof this._activeTodoCard.ingestExternal === 'function') {
+      this._activeTodoCard.ingestExternal(data);
+      return true;
+    }
+
+    // grok often emits the initial tool_call event WITHOUT rawInput,
+    // then fills it in on a subsequent tool_call_update. By that point
+    // we've already created a regular card. Swap it for a todo card
+    // in place so the user sees the checklist, not raw JSON.
+    const turn = this.activeTurn || this.turns[this.turns.length - 1];
+    if (turn && data.toolCallId) {
+      const entry = turn.tools.find((t) => t.id === data.toolCallId);
+      if (entry && entry.card && !entry.card.isTodo) {
+        const next = renderTodoWriteCard(data);
+        if (entry.card.node && entry.card.node.parentNode) {
+          entry.card.node.parentNode.replaceChild(next.node, entry.card.node);
+        }
+        entry.card = next;
+        this._activeTodoCard = next;
+        // Drop any in-flight chip the old regular card had registered;
+        // todo cards don't participate in the strip.
+        try { this._removeInFlight(data.toolCallId); } catch { /* ignore */ }
+        return true;
+      }
+      // An existing todo card with the same id getting a non-merge
+      // update: just re-ingest. Covers the rare case of grok re-seeding
+      // the list mid-conversation.
+      if (entry && entry.card && entry.card.isTodo) {
+        entry.card.applyUpdate(data);
+        this._activeTodoCard = entry.card;
+        return true;
+      }
+    }
+
+    // No existing entry: let the normal creation path run and tag the
+    // resulting card as the active todo (renderToolCard will dispatch
+    // to renderTodoWriteCard when rawInput.variant is present).
+    this._pendingTodoSeed = true;
+    return false;
+  }
+
   onToolCall(data, opts) {
+    // TodoWrite tool calls coalesce into a single live-updating card
+    // (see _maybeRouteTodoToolCall). Subsequent calls with merge=true
+    // are absorbed by the previous card instead of producing siblings.
+    if (this._maybeRouteTodoToolCall(data, opts)) return;
+
     const turn = this.ensureTurn();
     const card = renderToolCard(data);
     turn.tools.push({ id: data.toolCallId, card });
@@ -2232,14 +2302,21 @@ export class ChatView {
     this._ensureToolsGroup(turn).appendChild(card.node);
     this._scrollToolsToBottom();
     // Add to the in-flight strip unless this came from history replay
-    // (those calls are already terminal and would just flash).
-    if (live) {
+    // (those calls are already terminal and would just flash). Skip
+    // entirely for todo cards: they aren't interesting work in flight.
+    if (live && !card.isTodo) {
       this._addInFlight(data, card.node);
+    }
+    if (this._pendingTodoSeed) {
+      this._activeTodoCard = card;
+      this._pendingTodoSeed = false;
     }
     this.scrollToBottom();
   }
 
   onToolCallUpdate(data, opts) {
+    if (this._maybeRouteTodoToolCall(data, opts)) return;
+
     const turn = this.activeTurn || this.turns[this.turns.length - 1];
     if (!turn) return;
     let entry = turn.tools.find(t => t.id === data.toolCallId);
@@ -2253,7 +2330,11 @@ export class ChatView {
       if (live) card.node.classList.add('tool-pill--enter');
       this._ensureToolsGroup(turn).appendChild(card.node);
       this._scrollToolsToBottom();
-      if (live) this._addInFlight(data, card.node);
+      if (live && !card.isTodo) this._addInFlight(data, card.node);
+      if (this._pendingTodoSeed) {
+        this._activeTodoCard = card;
+        this._pendingTodoSeed = false;
+      }
       entry = turn.tools[turn.tools.length - 1];
     }
     // Always reconcile the strip against the actual pill statuses. This is
