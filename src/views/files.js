@@ -109,11 +109,35 @@ export function mountFilesTab(container, agent) {
 
   container.replaceChildren(root);
 
+  // Listen for the chat view's "a file-mutating tool just completed" event
+  // and re-list the current dir if it's for this same agent. Debounced so a
+  // burst of completions (e.g., several Edits in one turn) collapses to one
+  // refresh per tick.
+  let refreshTimer = null;
+  state.onFilesChanged = (ev) => {
+    const d = ev && ev.detail;
+    if (!d || !state.agent || d.agentId !== state.agent.id) return;
+    if (refreshTimer) return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      if (state.destroyed) return;
+      // Only refresh the dir listing if the viewer isn't actively showing
+      // a file (avoid yanking the user's reading state). If a file is
+      // selected, reloadFile would be a nice-to-have but skipping it is
+      // safe: the user can hit refresh to re-open if they want.
+      loadDir(state, state.currentPath);
+    }, 250);
+  };
+  document.addEventListener('grok-remote:files-changed', state.onFilesChanged);
+
   loadDir(state, state.currentPath);
 }
 
 export function unmountFilesTab() {
   if (!activeState) return;
+  if (activeState.onFilesChanged) {
+    document.removeEventListener('grok-remote:files-changed', activeState.onFilesChanged);
+  }
   activeState.destroyed = true;
   activeState = null;
 }

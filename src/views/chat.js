@@ -1434,12 +1434,12 @@ export class ChatView {
     fullscreen.innerHTML = iconHtml(this._toolsColFullscreen ? 'minimize-2' : 'maximize-2');
     this._splitFullscreenBtn = fullscreen;
 
-    const toggle = el('button', {
-      type: 'button',
-      class: 'chat-tools-col__toggle',
-      title: 'collapse tools panel',
-      onclick: () => this._toggleToolsCol(),
-    }, '⟩');
+    // The collapse-tools control lives on the topbar (right-hand panel
+    // icon) and is the single source of truth. We intentionally do NOT
+    // duplicate it in the column header. _splitToggleBtn is kept on the
+    // instance so other code paths that toggle its `hidden` state on
+    // mobile still work without a null check.
+    this._splitToggleBtn = null;
 
     const header = el('div', { class: 'chat-tools-col__head' },
       el('div', { class: 'chat-tools-col__tabs' },
@@ -1448,10 +1448,8 @@ export class ChatView {
       ),
       el('span', { class: 'chat-tools-col__spacer' }),
       fullscreen,
-      toggle,
     );
 
-    this._splitToggleBtn = toggle;
     this.toolsColEl.replaceChildren(header, this.toolsStreamEl, this.toolsFilesPaneEl);
     this._applyToolsColTab();
   }
@@ -2197,6 +2195,21 @@ export class ChatView {
     // robust to wire-format variations: whatever rendered the pill as
     // COMPLETED also drains its chip from the strip.
     this._resyncInFlightStrip();
+
+    // If a file-mutating tool (Write / Edit / MultiEdit, all kind: 'edit')
+    // just completed, ping the Files panel so it can re-list. Skipped while
+    // replaying history because the disk is already in its final state and
+    // a flurry of refreshes during catch-up wastes IO. The event carries
+    // the agent id so the listener can ignore updates from a stale mount.
+    if (!this._isReplaying && this.agentId) {
+      const status = String((data && data.status) || '').toLowerCase();
+      const kind   = String((data && data.kind)   || '').toLowerCase();
+      if (status === 'completed' && kind === 'edit') {
+        document.dispatchEvent(new CustomEvent('grok-remote:files-changed', {
+          detail: { agentId: this.agentId, toolCallId: data.toolCallId },
+        }));
+      }
+    }
   }
 
   // Walk the current turn's tools and drop any strip chips whose card has

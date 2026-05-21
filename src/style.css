@@ -7814,6 +7814,13 @@ body::before {
 }
 .chat-tools-files > * { flex: 1 1 auto; min-height: 0; }
 
+/* The `hidden` HTML attribute defaults to `display: none`, but the
+   `.chat-tools-stream` rule above sets `display: flex` which wins on
+   specificity. Force the hide here so only one tab content renders at
+   a time. */
+.chat-tools-stream[hidden],
+.chat-tools-files[hidden] { display: none !important; }
+
 /* Full-screen mode: hide the chat stream, drop the Split.js gutter,
    and let the tools column take the full chat-split width. The CSS
    wins over Split.js's inline flex-basis thanks to !important. */
