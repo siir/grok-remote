@@ -1476,6 +1476,22 @@ export class ChatView {
     this._toolsColTab = key;
     try { localStorage.setItem(ChatView.CHAT_TOOLS_TAB_KEY, key); } catch { /* ignore */ }
     this._applyToolsColTab();
+    // Apply this tab's remembered width to the live Split.js instance.
+    // Skipped when the panel is collapsed (split is destroyed) or
+    // fullscreen (sizes are irrelevant), or on mobile (no split). The
+    // cached _chatSplitLastSizes is kept in sync so the next expand
+    // picks up the right width.
+    if (this._chatSplit && !this._chatSplitCollapsed && !this._toolsColFullscreen
+        && !this._isChatMobile()) {
+      const sizes = this._readChatSplitSizesForTab(key);
+      try { this._chatSplit.setSizes(sizes); } catch { /* ignore */ }
+      this._chatSplitLastSizes = sizes;
+    } else {
+      // Even when we can't apply now, keep the cached "last sizes" in
+      // sync so the next expand or fullscreen-restore uses the right
+      // width for the now-active tab.
+      this._chatSplitLastSizes = this._readChatSplitSizesForTab(key);
+    }
   }
 
   _applyToolsColTab() {
@@ -1544,23 +1560,54 @@ export class ChatView {
     );
   }
 
-  // Persisted state keys for the inner chat split.
+  // Persisted state keys for the inner chat split. Sizes are stored
+  // per-tab so the user's preferred Files width can differ from their
+  // preferred Tools width (Files defaults to half, Tools to ~30%).
   static get CHAT_SPLIT_SIZES_KEY()     { return 'grok-remote.split.chat'; }
   static get CHAT_SPLIT_COLLAPSED_KEY() { return 'grok-remote.split.chat.collapsed'; }
-  static get CHAT_SPLIT_DEFAULT_SIZES() { return [70, 30]; }
+  static get CHAT_SPLIT_DEFAULT_SIZES() {
+    return { tools: [70, 30], files: [50, 50] };
+  }
   static get CHAT_SPLIT_MOBILE_MAX()    { return 720; }
 
-  _readChatSplitSizes() {
+  _isValidSizesArray(a) {
+    return Array.isArray(a) && a.length === 2 &&
+      a.every((n) => typeof n === 'number' && isFinite(n) && n >= 0 && n <= 100);
+  }
+
+  _readAllChatSplitSizes() {
+    const defaults = ChatView.CHAT_SPLIT_DEFAULT_SIZES;
     try {
       const raw = localStorage.getItem(ChatView.CHAT_SPLIT_SIZES_KEY);
-      if (!raw) return ChatView.CHAT_SPLIT_DEFAULT_SIZES.slice();
+      if (!raw) return { ...defaults };
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length === 2 &&
-          parsed.every((n) => typeof n === 'number' && isFinite(n) && n >= 0 && n <= 100)) {
-        return parsed;
+      // Legacy format: a bare [a, b] from before per-tab sizes existed.
+      // Treat it as the Tools tab's prior preference; keep the new Files
+      // default unless the user has already customized it.
+      if (this._isValidSizesArray(parsed)) {
+        return { ...defaults, tools: parsed };
+      }
+      if (parsed && typeof parsed === 'object') {
+        const out = { ...defaults };
+        if (this._isValidSizesArray(parsed.tools)) out.tools = parsed.tools;
+        if (this._isValidSizesArray(parsed.files)) out.files = parsed.files;
+        return out;
       }
     } catch { /* ignore */ }
-    return ChatView.CHAT_SPLIT_DEFAULT_SIZES.slice();
+    return { ...defaults };
+  }
+
+  _readChatSplitSizesForTab(tab) {
+    const all = this._readAllChatSplitSizes();
+    return (all[tab] || all.tools).slice();
+  }
+
+  _writeChatSplitSizesForTab(tab, sizes) {
+    if (!this._isValidSizesArray(sizes)) return;
+    const all = this._readAllChatSplitSizes();
+    all[tab] = sizes;
+    try { localStorage.setItem(ChatView.CHAT_SPLIT_SIZES_KEY, JSON.stringify(all)); }
+    catch { /* ignore */ }
   }
 
   _isChatMobile() {
@@ -1580,11 +1627,10 @@ export class ChatView {
 
     let collapsed = false;
     try { collapsed = localStorage.getItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY) === '1'; } catch { /* ignore */ }
-    this._chatSplitLastSizes = this._readChatSplitSizes();
+    // Seed the cached "last sizes" from the currently active tab so an
+    // expand-after-collapse comes back to the right width for that tab.
+    this._chatSplitLastSizes = this._readChatSplitSizesForTab(this._toolsColTab);
 
-    const persistSizes = (sizes) => {
-      try { localStorage.setItem(ChatView.CHAT_SPLIT_SIZES_KEY, JSON.stringify(sizes)); } catch { /* ignore */ }
-    };
     const buildSplit = (sizes) => {
       this._chatSplit = Split([this.streamEl, this.toolsColEl], {
         sizes,
@@ -1598,8 +1644,11 @@ export class ChatView {
         }),
         gutterStyle: (dim, gutterSize) => ({ 'flex-basis': `${gutterSize}px` }),
         onDragEnd: (next) => {
+          // Persist under the tab that is active at the moment of the
+          // drag. Users get a remembered width per tab without any
+          // explicit "save" step.
           this._chatSplitLastSizes = next;
-          persistSizes(next);
+          this._writeChatSplitSizesForTab(this._toolsColTab, next);
         },
       });
     };
