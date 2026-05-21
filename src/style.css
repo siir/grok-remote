@@ -3445,6 +3445,147 @@ body::before {
   color: #fda4af;
 }
 
+/* midnight: deep navy with electric-blue accents. Clean IDE feel. */
+[data-theme="midnight"] {
+  --bg:        #070d1a;
+  --bg-soft:   #0a1224;
+  --panel:     #0e182f;
+  --panel-2:   #131f3c;
+  --border:    #1e2e52;
+  --border-2:  #2b4174;
+  --text:      #dce5f5;
+  --muted:     #7d8db0;
+  --dim:       #4a5680;
+  --teal:      #38bdf8;
+  --blue:      #60a5fa;
+  --green:     #4ade80;
+  --amber:     #fbbf24;
+  --red:       #f87171;
+  --grad-1:    #38bdf8;
+  --grad-2:    #60a5fa;
+}
+[data-theme="midnight"] body::before {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%,   rgba(56, 189, 248, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(96, 165, 250, 0.06) 0%, transparent 60%);
+}
+[data-theme="midnight"] .scanlines { display: none; }
+[data-theme="midnight"] .figlet {
+  filter: drop-shadow(0 0 12px rgba(96, 165, 250, 0.40));
+  background: linear-gradient(90deg, #38bdf8 0%, #60a5fa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="midnight"] .brand-name {
+  background: linear-gradient(90deg, #38bdf8 0%, #60a5fa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="midnight"] .brand-dot {
+  background: linear-gradient(135deg, #38bdf8, #60a5fa);
+  box-shadow: 0 0 14px rgba(96, 165, 250, 0.55);
+}
+[data-theme="midnight"] .md-inline-code {
+  background: rgba(96, 165, 250, 0.12);
+  color: #93c5fd;
+}
+
+/* carbon: graphite charcoal with orange accents. Developer-tool feel. */
+[data-theme="carbon"] {
+  --bg:        #0c0c0d;
+  --bg-soft:   #111114;
+  --panel:     #18181c;
+  --panel-2:   #1f1f24;
+  --border:    #2a2a30;
+  --border-2:  #3b3b44;
+  --text:      #ededf0;
+  --muted:     #8d8d96;
+  --dim:       #54545c;
+  --teal:      #fb923c;
+  --blue:      #f59e0b;
+  --green:     #84cc16;
+  --amber:     #fbbf24;
+  --red:       #ef4444;
+  --grad-1:    #fb923c;
+  --grad-2:    #f59e0b;
+}
+[data-theme="carbon"] body::before {
+  background:
+    radial-gradient(ellipse 70% 45% at 50% 0%,   rgba(251, 146, 60, 0.05) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 35% at 100% 100%, rgba(245, 158, 11, 0.04) 0%, transparent 60%);
+}
+[data-theme="carbon"] .scanlines { display: none; }
+[data-theme="carbon"] .figlet {
+  filter: drop-shadow(0 0 12px rgba(251, 146, 60, 0.35));
+  background: linear-gradient(90deg, #fb923c 0%, #f59e0b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="carbon"] .brand-name {
+  background: linear-gradient(90deg, #fb923c 0%, #f59e0b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="carbon"] .brand-dot {
+  background: linear-gradient(135deg, #fb923c, #f59e0b);
+  box-shadow: 0 0 14px rgba(251, 146, 60, 0.50);
+}
+[data-theme="carbon"] .md-inline-code {
+  background: rgba(251, 146, 60, 0.10);
+  color: #fdba74;
+}
+
+/* mocha: dark espresso brown with caramel accents. Warm dark. */
+[data-theme="mocha"] {
+  --bg:        #15110d;
+  --bg-soft:   #1b1611;
+  --panel:     #221c16;
+  --panel-2:   #2b231b;
+  --border:    #3d3127;
+  --border-2:  #594536;
+  --text:      #f0e6d8;
+  --muted:     #b39884;
+  --dim:       #6b5544;
+  --teal:      #e0a575;
+  --blue:      #d4a574;
+  --green:     #a8c97f;
+  --amber:     #f4b860;
+  --red:       #e07a5f;
+  --grad-1:    #e0a575;
+  --grad-2:    #f4b860;
+}
+[data-theme="mocha"] body::before {
+  background:
+    radial-gradient(ellipse 70% 45% at 50% 0%,   rgba(224, 165, 117, 0.07) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 35% at 0% 100%,  rgba(244, 184, 96, 0.05) 0%, transparent 60%);
+}
+[data-theme="mocha"] .scanlines { display: none; }
+[data-theme="mocha"] .figlet {
+  filter: drop-shadow(0 0 12px rgba(244, 184, 96, 0.35));
+  background: linear-gradient(90deg, #e0a575 0%, #f4b860 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="mocha"] .brand-name {
+  background: linear-gradient(90deg, #e0a575 0%, #f4b860 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+[data-theme="mocha"] .brand-dot {
+  background: linear-gradient(135deg, #e0a575, #f4b860);
+  box-shadow: 0 0 14px rgba(224, 165, 117, 0.50);
+}
+[data-theme="mocha"] .md-inline-code {
+  background: rgba(224, 165, 117, 0.12);
+  color: #f4d3a8;
+}
+
 /* ===== topbar theme toggle ===== */
 /* Topbar bg-process counter */
 .topbar-bg {

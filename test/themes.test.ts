@@ -16,15 +16,31 @@ const store = new Map<string, string>();
 } as Storage;
 
 const docDataset: Record<string, string> = {};
-(globalThis as unknown as { document: { documentElement: { dataset: Record<string, string> } } }).document = {
+const metaEl: { name?: string; content: string } = { content: '' };
+(globalThis as unknown as {
+  document: {
+    documentElement: { dataset: Record<string, string> };
+    querySelector: (sel: string) => unknown;
+  };
+}).document = {
   documentElement: { dataset: docDataset },
+  querySelector: (sel: string) => sel === 'meta[name="theme-color"]' ? metaEl : null,
 };
 
 const themes = await import('../src/lib/themes.js');
 
 test('THEMES exposes the registered themes', () => {
   const names = themes.THEMES.map((t) => t.name).sort();
-  assert.deepEqual(names, ['aurora', 'dark', 'hacker', 'light', 'nebula', 'sunset', 'unicorn']);
+  assert.deepEqual(names, [
+    'aurora', 'carbon', 'dark', 'hacker', 'light',
+    'midnight', 'mocha', 'nebula', 'sunset', 'unicorn',
+  ]);
+});
+
+test('every theme declares a chrome color (PWA window / browser titlebar)', () => {
+  for (const t of themes.THEMES) {
+    assert.match(t.chrome, /^#[0-9a-f]{6}$/i, `${t.name} should have a hex chrome color`);
+  }
 });
 
 test('getTheme returns the default when no value is stored', () => {
@@ -68,13 +84,16 @@ test('applyTheme normalizes unknown themes to default before writing', () => {
 test('nextTheme cycles through the registry in declaration order', () => {
   store.clear();
   store.set('grok-remote.theme', 'dark');
-  assert.equal(themes.nextTheme('dark'),    'light');
-  assert.equal(themes.nextTheme('light'),   'hacker');
-  assert.equal(themes.nextTheme('hacker'),  'unicorn');
-  assert.equal(themes.nextTheme('unicorn'), 'nebula');
-  assert.equal(themes.nextTheme('nebula'),  'aurora');
-  assert.equal(themes.nextTheme('aurora'),  'sunset');
-  assert.equal(themes.nextTheme('sunset'),  'dark');
+  assert.equal(themes.nextTheme('dark'),     'light');
+  assert.equal(themes.nextTheme('light'),    'hacker');
+  assert.equal(themes.nextTheme('hacker'),   'unicorn');
+  assert.equal(themes.nextTheme('unicorn'),  'nebula');
+  assert.equal(themes.nextTheme('nebula'),   'aurora');
+  assert.equal(themes.nextTheme('aurora'),   'sunset');
+  assert.equal(themes.nextTheme('sunset'),   'midnight');
+  assert.equal(themes.nextTheme('midnight'), 'carbon');
+  assert.equal(themes.nextTheme('carbon'),   'mocha');
+  assert.equal(themes.nextTheme('mocha'),    'dark');
 });
 
 test('getThemeMeta returns the matching theme record', () => {

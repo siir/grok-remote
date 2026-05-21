@@ -16,9 +16,13 @@ export interface Theme {
   blurb:  string;
   accent: string;
   swatch: string;
+  chrome: string; // browser titlebar / PWA window color; matches --bg-soft
 }
 
-export type ThemeName = 'dark' | 'light' | 'hacker' | 'unicorn' | 'nebula' | 'aurora' | 'sunset';
+export type ThemeName =
+  | 'dark' | 'light' | 'hacker' | 'unicorn'
+  | 'nebula' | 'aurora' | 'sunset'
+  | 'midnight' | 'carbon' | 'mocha';
 
 export const THEMES: Theme[] = [
   {
@@ -27,6 +31,7 @@ export const THEMES: Theme[] = [
     blurb:   'deep blue-black with teal accents (default)',
     accent:  '#5eead4',
     swatch:  '#07090c',
+    chrome:  '#0c1117',
   },
   {
     name:    'light',
@@ -34,6 +39,7 @@ export const THEMES: Theme[] = [
     blurb:   'warm off-white with darker teal/blue accents',
     accent:  '#0d9488',
     swatch:  '#fafafa',
+    chrome:  '#ffffff',
   },
   {
     name:    'hacker',
@@ -41,6 +47,7 @@ export const THEMES: Theme[] = [
     blurb:   'pure black with phosphor green text',
     accent:  '#00ff41',
     swatch:  '#000000',
+    chrome:  '#050505',
   },
   {
     name:    'unicorn',
@@ -48,6 +55,7 @@ export const THEMES: Theme[] = [
     blurb:   'pastel rainbow on a lavender-tinted backdrop',
     accent:  '#ff6ec7',
     swatch:  '#f9f7ff',
+    chrome:  '#fffafe',
   },
   {
     name:    'nebula',
@@ -55,6 +63,7 @@ export const THEMES: Theme[] = [
     blurb:   'deep indigo with cyan-to-magenta gradient accents',
     accent:  '#a78bfa',
     swatch:  '#0a0814',
+    chrome:  '#0e0a1c',
   },
   {
     name:    'aurora',
@@ -62,6 +71,7 @@ export const THEMES: Theme[] = [
     blurb:   'midnight teal with green-to-blue northern-lights glow',
     accent:  '#34d399',
     swatch:  '#06121a',
+    chrome:  '#081820',
   },
   {
     name:    'sunset',
@@ -69,6 +79,31 @@ export const THEMES: Theme[] = [
     blurb:   'dusk plum with coral-to-amber accent glow',
     accent:  '#fb7185',
     swatch:  '#150c14',
+    chrome:  '#1a0f1a',
+  },
+  {
+    name:    'midnight',
+    label:   'midnight',
+    blurb:   'deep navy with electric-blue accents',
+    accent:  '#60a5fa',
+    swatch:  '#070d1a',
+    chrome:  '#0a1224',
+  },
+  {
+    name:    'carbon',
+    label:   'carbon',
+    blurb:   'graphite charcoal with orange accents',
+    accent:  '#fb923c',
+    swatch:  '#0c0c0d',
+    chrome:  '#111114',
+  },
+  {
+    name:    'mocha',
+    label:   'mocha',
+    blurb:   'dark espresso brown with caramel accents',
+    accent:  '#e0a575',
+    swatch:  '#15110d',
+    chrome:  '#1b1611',
   },
 ];
 
@@ -97,6 +132,9 @@ export function applyTheme(name: string): string {
   const n = isValid(name) ? name : DEFAULT_THEME;
   if (typeof document !== 'undefined' && document.documentElement) {
     document.documentElement.dataset.theme = n;
+    // Browser titlebar / PWA window chrome follows the active theme.
+    const meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
+    if (meta) meta.content = getThemeMeta(n).chrome;
   }
   return n;
 }
