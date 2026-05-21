@@ -335,13 +335,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   pingHello();
   setInterval(pingHello, 10000);
 
-  // Static GR brand mark in the topbar. The full hole-to-GR animation
-  // now lives in the chat view (plays inside the chat-stream when a
-  // fresh conversation is opened); the topbar just shows the settled
-  // letters as a tiny brand mark.
-  const topMark = document.getElementById('topbar-mark');
-  if (topMark) topMark.textContent = 'GR';
-
   mountDashboard();
 
   // wire the topbar theme toggle.

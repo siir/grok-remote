@@ -12,6 +12,7 @@ import { el } from './render.js';
 import { iconHtml } from './icons.js';
 import { api } from './api.js';
 import { openUpdateModal } from '../views/update-modal.js';
+import { openChangelogModal } from '../views/changelog-modal.js';
 
 const POLL_MS = 10 * 60 * 1000;
 const LAST_SEEN_VERSION_KEY = 'grok-remote.update.lastSeenVersion';
@@ -27,7 +28,20 @@ let pollTimer = null;
 export function installVersionFooter({ host } = {}) {
   if (footerEl) return footerEl;
 
-  leftEl = el('div', { class: 'app-footer__left' },
+  // The whole left cluster acts as a "open changelog" button. We use a
+  // <button> so it gets keyboard focus + a proper click target; the inner
+  // spans keep their existing classes so the existing styles still apply.
+  leftEl = el('button', {
+    type: 'button',
+    class: 'app-footer__left app-footer__left--btn',
+    title: 'view changelog',
+    'aria-label': 'view changelog',
+    onclick: () => {
+      const version = (currentInfo && currentInfo.version) ||
+        (typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '');
+      openChangelogModal({ currentVersion: version });
+    },
+  },
     el('span', { class: 'app-footer__brand' }, 'grok-remote'),
     el('span', { class: 'app-footer__version' }, 'v?'),
     el('span', { class: 'app-footer__sep' }, '·'),

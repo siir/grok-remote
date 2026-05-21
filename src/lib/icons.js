@@ -169,6 +169,35 @@ export const ICONS = {
     <path d="M7.5 7.5l5 5"/>
     <path d="M12.5 7.5l-5 5"/>
   `),
+
+  // maximize-2: corner arrows pointing outward. Used to expand the tools
+  // column to fill the chat area.
+  'maximize-2': wrap(`
+    <polyline points="13 3 17 3 17 7"/>
+    <polyline points="7 17 3 17 3 13"/>
+    <line x1="17" y1="3" x2="11" y2="9"/>
+    <line x1="3" y1="17" x2="9" y2="11"/>
+  `),
+
+  // minimize-2: corner arrows pointing inward. Used to restore the tools
+  // column from full-screen mode.
+  'minimize-2': wrap(`
+    <polyline points="3 11 9 11 9 17"/>
+    <polyline points="17 9 11 9 11 3"/>
+    <line x1="11" y1="9" x2="17" y2="3"/>
+    <line x1="3" y1="17" x2="9" y2="11"/>
+  `),
+
+  // wrench icon for the "tool calls" tab in the chat tools column header.
+  wrench: wrap(`
+    <path d="M14 6.5a3.5 3.5 0 0 1-4.5 3.36L4 15.36 6.64 18l5.5-5.5A3.5 3.5 0 1 0 14 6.5z"/>
+    <path d="M14 6.5l-1.7-1.7a1 1 0 0 1 0-1.4l1-1a1 1 0 0 1 1.4 0L17.6 5.3"/>
+  `),
+
+  // folder icon for the "files" tab in the chat tools column header.
+  folder: wrap(`
+    <path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.5l1.5 2H16a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z"/>
+  `),
 };
 
 export function iconHtml(name) {

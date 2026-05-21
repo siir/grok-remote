@@ -1,0 +1,124 @@
+name: release
+
+# Every push to main bumps the patch version and creates a GitHub release
+# with notes generated from the commits since the previous tag. We do NOT
+# commit the version bump back to main: package.json stays at whatever the
+# maintainer set it to (treated as a floor), and the canonical "running
+# version" comes from `git describe --tags --abbrev=0`. This avoids the
+# bot-commit-push-loop that bites the "push every change" workflow.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: "!contains(github.event.head_commit.message, '[skip release]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: install deps
+        run: npm ci
+
+      - name: run tests
+        run: npm test
+
+      - name: build
+        run: npm run build
+
+      - name: compute next version
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          LAST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          if [ -z "$LAST_TAG" ]; then
+            # Seed from package.json on first release; defaults to v0.0.0
+            # if package.json has no version field for some reason.
+            PKG_VER="$(node -p "require('./package.json').version || '0.0.0'")"
+            LAST_TAG="v${PKG_VER}"
+          fi
+          VER="${LAST_TAG#v}"
+          IFS='.' read -r MAJ MIN PAT <<< "$VER"
+          NEXT="v${MAJ}.${MIN}.$((PAT + 1))"
+          echo "last_tag=$LAST_TAG"  >> "$GITHUB_OUTPUT"
+          echo "next_tag=$NEXT"      >> "$GITHUB_OUTPUT"
+          echo "next_version=${NEXT#v}" >> "$GITHUB_OUTPUT"
+
+      - name: skip if no new commits since last tag
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          LAST="${{ steps.bump.outputs.last_tag }}"
+          if git rev-parse -q --verify "refs/tags/$LAST" >/dev/null; then
+            COUNT="$(git rev-list --count "$LAST"..HEAD)"
+          else
+            COUNT=1
+          fi
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "no new commits since $LAST; skipping release"
+          fi
+
+      - name: generate notes
+        if: steps.gate.outputs.count != '0'
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          LAST="${{ steps.bump.outputs.last_tag }}"
+          if git rev-parse -q --verify "refs/tags/$LAST" >/dev/null; then
+            RANGE="$LAST..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          {
+            echo "## What changed"
+            echo
+            git log "$RANGE" --no-merges --pretty=format:'- %s ([`%h`](https://github.com/${{ github.repository }}/commit/%H))'
+            echo
+            echo
+            echo "_Full diff: [\`$LAST...${{ steps.bump.outputs.next_tag }}\`](https://github.com/${{ github.repository }}/compare/$LAST...${{ steps.bump.outputs.next_tag }})_"
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: create tag
+        if: steps.gate.outputs.count != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.bump.outputs.next_tag }}" -m "release ${{ steps.bump.outputs.next_tag }}"
+          git push origin "${{ steps.bump.outputs.next_tag }}"
+
+      - name: create github release
+        if: steps.gate.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.bump.outputs.next_tag }}" \
+            --title "${{ steps.bump.outputs.next_tag }}" \
+            --notes-file release-notes.md \
+            --latest

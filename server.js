@@ -27,6 +27,7 @@ import {
   readDiff as readVersionDiff,
   runUpdate as runVersionUpdate,
   isUpdateInProgress,
+  readReleases,
 } from './lib/version-update.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -175,6 +176,16 @@ async function handleApi(req, res, url, method) {
   if (url === '/api/version/diff' && method === 'GET') {
     try {
       const data = await readVersionDiff();
+      return sendJson(res, 200, data);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message });
+    }
+  }
+  if ((url === '/api/version/releases' || url.startsWith('/api/version/releases?'))
+      && method === 'GET') {
+    try {
+      const force = /\bforce=1\b/.test(url);
+      const data = await readReleases({ force });
       return sendJson(res, 200, data);
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: err.message });

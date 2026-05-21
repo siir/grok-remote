@@ -1,6 +1,6 @@
 {
   "name": "grok-remote",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run your grok agent over your tailnet. Hello-world starting point for the remote-agent build.",
   "type": "module",
   "private": true,

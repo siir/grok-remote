@@ -232,6 +232,8 @@ export const api = {
     current:    () => request('GET', '/api/version/current'),
     latest:     () => request('GET', '/api/version/latest'),
     diff:       () => request('GET', '/api/version/diff'),
+    releases:   ({ force = false } = {}) =>
+      request('GET', `/api/version/releases${force ? '?force=1' : ''}`),
     updateUrl:  () => '/api/version/update',
   },
 };

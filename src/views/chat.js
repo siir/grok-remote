@@ -54,6 +54,12 @@ export class ChatView {
     this.streamEl  = el('div', { class: 'chat-stream' });
     this.toolsColEl = el('div', { class: 'chat-tools-col' });
     this.toolsStreamEl = el('div', { class: 'chat-tools-stream' });
+    // Files preview panel that lives inside the tools column. Mounted
+    // lazily when the user switches the in-column tab to "files".
+    this.toolsFilesPaneEl = el('div', { class: 'chat-tools-files', hidden: true });
+    this._toolsColTab = this._readToolsColTab();
+    this._toolsColFullscreen = this._readToolsColFullscreen();
+    this._toolsFilesMounted = false;
     this._buildToolsColHeader();
     this.composerEl = this.buildComposer();
     this.tabsEl    = this.buildTabs();
@@ -464,6 +470,12 @@ export class ChatView {
       if (this.agentId) {
         mountFilesTab(this.filesPane, { id: this.agentId });
         this.filesMounted = true;
+        // The Files singleton just moved into the top-bar pane; clear the
+        // tools-column's stale shell so it doesn't look duplicated.
+        if (this._toolsFilesMounted) {
+          this._toolsFilesMounted = false;
+          if (this.toolsFilesPaneEl) this.toolsFilesPaneEl.replaceChildren();
+        }
       } else if (!this.filesMounted) {
         this.filesPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       }
@@ -801,6 +813,13 @@ export class ChatView {
       unmountFilesTab();
       this.filesMounted = false;
     }
+    // Tools-column files view shares the same singleton as the top-bar
+    // Files tab. Unmount before remounting against the new agent.
+    if (this._toolsFilesMounted) {
+      unmountFilesTab();
+      this._toolsFilesMounted = false;
+      if (this.toolsFilesPaneEl) this.toolsFilesPaneEl.replaceChildren();
+    }
     if (this.traceMounted) {
       unmountTraceTab();
       this.traceMounted = false;
@@ -818,6 +837,11 @@ export class ChatView {
       this.streamEl.appendChild(this.empty);
       this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       this.filesPane.replaceChildren();
+      if (this.toolsFilesPaneEl && this._toolsColTab === 'files') {
+        this.toolsFilesPaneEl.replaceChildren(
+          el('div', { class: 'pane-empty' }, 'no agent selected'),
+        );
+      }
       this._setComposerEnabled(false);
       // Hide the star + connect buttons until an agent is loaded.
       if (this.starBtn)     this.starBtn.hidden = true;
@@ -854,6 +878,13 @@ export class ChatView {
     if (this.tabsState === 'files') {
       mountFilesTab(this.filesPane, { id: this.agentId });
       this.filesMounted = true;
+    }
+
+    // If the tools-column files tab is active, rebind it to the new agent's
+    // files. _applyToolsColTab handles the unmount/mount via the shared
+    // singleton.
+    if (this._toolsColTab === 'files') {
+      this._applyToolsColTab();
     }
 
     const agentIdAtCall = agent.id;
@@ -1373,22 +1404,146 @@ export class ChatView {
     this._easedToolsRaf = requestAnimationFrame(tick);
   }
 
-  // Build the static header (title + collapse toggle) for the tools column.
-  // The actual Split.js instance is created in _initChatSplit() from mount(),
-  // after the elements are in the DOM.
+  // Build the header for the tools column. The header has two segmented
+  // tab buttons (tools/files), a spacer, then a full-screen toggle and the
+  // existing collapse toggle. The actual Split.js instance is created in
+  // _initChatSplit() from mount(), after the elements are in the DOM.
   _buildToolsColHeader() {
+    const mkTab = (key, label, iconName) => el('button', {
+      type: 'button',
+      class: `chat-tools-tab${this._toolsColTab === key ? ' chat-tools-tab--active' : ''}`,
+      'data-tab': key,
+      title: label,
+      onclick: () => this._setToolsColTab(key),
+    },
+      el('span', { class: 'chat-tools-tab__ico', innerHTML: iconHtml(iconName) }),
+      el('span', { class: 'chat-tools-tab__lbl' }, label),
+    );
+
+    this._toolsTabBtns = {
+      tools: mkTab('tools', 'tool calls', 'wrench'),
+      files: mkTab('files', 'files',      'folder'),
+    };
+
+    const fullscreen = el('button', {
+      type: 'button',
+      class: 'chat-tools-col__icon-btn chat-tools-col__fullscreen',
+      title: this._toolsColFullscreen ? 'restore tools panel' : 'expand tools panel',
+      onclick: () => this._toggleToolsFullscreen(),
+    });
+    fullscreen.innerHTML = iconHtml(this._toolsColFullscreen ? 'minimize-2' : 'maximize-2');
+    this._splitFullscreenBtn = fullscreen;
+
     const toggle = el('button', {
       type: 'button',
       class: 'chat-tools-col__toggle',
       title: 'collapse tools panel',
       onclick: () => this._toggleToolsCol(),
     }, '⟩');
+
     const header = el('div', { class: 'chat-tools-col__head' },
-      el('span', { class: 'chat-tools-col__title' }, 'tool calls'),
+      el('div', { class: 'chat-tools-col__tabs' },
+        this._toolsTabBtns.tools,
+        this._toolsTabBtns.files,
+      ),
+      el('span', { class: 'chat-tools-col__spacer' }),
+      fullscreen,
       toggle,
     );
+
     this._splitToggleBtn = toggle;
-    this.toolsColEl.replaceChildren(header, this.toolsStreamEl);
+    this.toolsColEl.replaceChildren(header, this.toolsStreamEl, this.toolsFilesPaneEl);
+    this._applyToolsColTab();
+  }
+
+  static get CHAT_TOOLS_TAB_KEY()        { return 'grok-remote.split.chat.tab'; }
+  static get CHAT_TOOLS_FULLSCREEN_KEY() { return 'grok-remote.split.chat.fullscreen'; }
+
+  _readToolsColTab() {
+    try {
+      const v = localStorage.getItem(ChatView.CHAT_TOOLS_TAB_KEY);
+      if (v === 'files' || v === 'tools') return v;
+    } catch { /* ignore */ }
+    return 'tools';
+  }
+
+  _readToolsColFullscreen() {
+    try { return localStorage.getItem(ChatView.CHAT_TOOLS_FULLSCREEN_KEY) === '1'; }
+    catch { return false; }
+  }
+
+  _setToolsColTab(key) {
+    if (key !== 'tools' && key !== 'files') return;
+    if (this._toolsColTab === key) return;
+    this._toolsColTab = key;
+    try { localStorage.setItem(ChatView.CHAT_TOOLS_TAB_KEY, key); } catch { /* ignore */ }
+    this._applyToolsColTab();
+  }
+
+  _applyToolsColTab() {
+    const key = this._toolsColTab;
+    if (this._toolsTabBtns) {
+      for (const [k, btn] of Object.entries(this._toolsTabBtns)) {
+        btn.classList.toggle('chat-tools-tab--active', k === key);
+      }
+    }
+    if (this.toolsStreamEl)    this.toolsStreamEl.hidden    = key !== 'tools';
+    if (this.toolsFilesPaneEl) this.toolsFilesPaneEl.hidden = key !== 'files';
+    if (key === 'files') {
+      // Reuse the same Files component as the top-bar Files tab. mountFilesTab
+      // is a module-singleton that unmounts any prior mount first, so calling
+      // it here transfers ownership of the file viewer into the tools column.
+      // The top-bar Files pane will appear empty until the user switches back.
+      if (this.agentId) {
+        mountFilesTab(this.toolsFilesPaneEl, { id: this.agentId });
+        this._toolsFilesMounted = true;
+        this.filesMounted = false;
+      } else {
+        this.toolsFilesPaneEl.replaceChildren(
+          el('div', { class: 'pane-empty' }, 'no agent selected'),
+        );
+      }
+    } else if (this._toolsFilesMounted) {
+      unmountFilesTab();
+      this._toolsFilesMounted = false;
+      this.toolsFilesPaneEl.replaceChildren();
+    }
+  }
+
+  _toggleToolsFullscreen() {
+    // Mobile: stacked layout, fullscreen has no meaning since there is no
+    // side-by-side split.
+    if (this._isChatMobile()) return;
+    // Going fullscreen on a collapsed split: expand first so the user has
+    // something to look at. Otherwise toggling fullscreen on a collapsed
+    // column would have no visible effect.
+    if (!this._toolsColFullscreen && this._chatSplitCollapsed) {
+      this._toggleToolsCol();
+    }
+    this._toolsColFullscreen = !this._toolsColFullscreen;
+    try {
+      localStorage.setItem(
+        ChatView.CHAT_TOOLS_FULLSCREEN_KEY,
+        this._toolsColFullscreen ? '1' : '0',
+      );
+    } catch { /* ignore */ }
+    this._applyToolsFullscreenClass();
+    if (this._splitFullscreenBtn) {
+      this._splitFullscreenBtn.innerHTML = iconHtml(
+        this._toolsColFullscreen ? 'minimize-2' : 'maximize-2',
+      );
+      this._splitFullscreenBtn.title = this._toolsColFullscreen
+        ? 'restore tools panel'
+        : 'expand tools panel';
+    }
+  }
+
+  _applyToolsFullscreenClass() {
+    if (!this.chatSplitEl) return;
+    this.chatSplitEl.classList.toggle(
+      'chat-split--tools-fullscreen',
+      !!this._toolsColFullscreen,
+    );
   }
 
   // Persisted state keys for the inner chat split.
@@ -1453,6 +1608,7 @@ export class ChatView {
 
     this._chatSplitCollapsed = collapsed;
     this._applyChatSplitCollapsedClass();
+    this._applyToolsFullscreenClass();
     this._updateToolsToggleLabel();
     if (!collapsed) buildSplit(this._chatSplitLastSizes);
     this._chatSplitBuild = buildSplit;
