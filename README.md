@@ -365,6 +365,12 @@ grok-remote/
 
 ---
 
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=daniel-farina/grok-remote&type=Date)](https://star-history.com/#daniel-farina/grok-remote&Date)
+
+---
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
