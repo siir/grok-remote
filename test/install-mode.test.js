@@ -6,6 +6,8 @@ import {
   modeFromArgs,
   chooseModeFromInputs,
   pm2EnvForMode,
+  autoStartFromArgs,
+  chooseAutoStartFromInputs,
 } from '../lib/install-mode.js';
 
 test('modeFromArgs recognizes explicit local flags', () => {
@@ -31,4 +33,24 @@ test('pm2EnvForMode passes the computed bind host through to ecosystem config', 
     PATH: '/bin',
     GROK_REMOTE_HOST: '127.0.0.1',
   });
+});
+
+test('autoStartFromArgs recognizes explicit flags', () => {
+  assert.equal(autoStartFromArgs(['--auto-start']), true);
+  assert.equal(autoStartFromArgs(['--no-auto-start']), false);
+  assert.equal(autoStartFromArgs([]), null);
+});
+
+test('chooseAutoStartFromInputs respects env vars before falling through', () => {
+  assert.equal(chooseAutoStartFromInputs({ args: [], env: { AUTO_START: '1' }, isTTY: false }), true);
+  assert.equal(chooseAutoStartFromInputs({ args: [], env: { AUTO_START: '0' }, isTTY: true }), false);
+});
+
+test('chooseAutoStartFromInputs defaults to false in non-interactive contexts', () => {
+  assert.equal(chooseAutoStartFromInputs({ args: [], env: {}, isTTY: false }), false);
+  assert.equal(chooseAutoStartFromInputs({ args: [], env: { NO_PROMPT: '1' }, isTTY: true }), false);
+});
+
+test('chooseAutoStartFromInputs returns null in TTY without explicit choice so the installer can prompt', () => {
+  assert.equal(chooseAutoStartFromInputs({ args: [], env: {}, isTTY: true }), null);
 });

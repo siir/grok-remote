@@ -71,13 +71,16 @@ The installer walks through, with animated `[ OK ]` / `[skip]` / `[warn]` / `[FA
 8. build dashboard (`vite build`)
 9. write pm2 ecosystem config
 10. start under pm2
-11. save pm2 process list
-12. install `gr` command (global shortcut)
-13. open dashboard in Chrome
+11. enable auto-start on boot (optional, opt-in prompt)
+12. save pm2 process list
+13. install `gr` command (global shortcut)
+14. open dashboard in Chrome
 
 Auto-open can be skipped with `--no-open`, `NO_OPEN=1`, `CI=1`, or when the installer detects you're over SSH.
 
-If a step warns about Tailscale auth, run `tailscale up` and open the URL it prints. On macOS, open `Tailscale.app` once if `tailscaled` isn't running. Then re-run `./install.sh` — every step is idempotent.
+The installer asks once whether to auto-start the server on reboot. Pick "yes" if you want the PWA dock icon to "just work" after a restart; on macOS this writes a user-level `launchd` entry that calls `pm2 resurrect` at login. Pre-select with `--auto-start` / `--no-auto-start` or `AUTO_START=1` / `AUTO_START=0`. Non-interactive installs (CI, `NO_PROMPT=1`) default to no.
+
+If a step warns about Tailscale auth, run `tailscale up` and open the URL it prints. On macOS, open `Tailscale.app` once if `tailscaled` isn't running. Then re-run `./install.sh`, every step is idempotent.
 
 For local-only installs, re-run setup with `./install.sh --local` or `gr install --local`. This keeps the server bound to `127.0.0.1` and does not touch existing conversations under `~/.grok-remote/agents`.
 

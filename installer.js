@@ -17,7 +17,11 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { chooseModeFromInputs, pm2EnvForMode } from './lib/install-mode.js';
+import {
+  chooseModeFromInputs,
+  chooseAutoStartFromInputs,
+  pm2EnvForMode,
+} from './lib/install-mode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HERE = __dirname;
@@ -233,6 +237,29 @@ async function chooseMode() {
   if (answer === '1' || answer === 'local' || answer === 'l') return 'local';
   // Default and explicit 2/tailnet/t all map to tailnet.
   return 'tailnet';
+}
+
+// Ask whether to register a launchd entry so the server resumes after reboot.
+// Honors --auto-start / --no-auto-start and AUTO_START=1/0. Defaults to false
+// on non-TTY so CI installs do not write launchd plists silently.
+async function chooseAutoStart() {
+  const args = process.argv.slice(2);
+  const resolved = chooseAutoStartFromInputs({ args, env: process.env, isTTY: process.stdin.isTTY });
+  if (resolved !== null) return resolved;
+
+  writeLn(`${WHITE}${bold}auto-start on boot?${reset}`);
+  writeLn(`  ${BLUE}[Y]${reset} ${WHITE}yes${reset}   ${MUT}(server resumes after reboot via launchd)${reset}`);
+  writeLn(`  ${BLUE}[n]${reset} ${WHITE}no${reset}    ${MUT}(start manually with 'gr' or 'gr start')${reset}`);
+  const rl = readline.createInterface({ input, output });
+  let answer = '';
+  try {
+    answer = (await rl.question(`${MUT}default [Y]: ${reset}`)).trim().toLowerCase();
+  } finally {
+    rl.close();
+  }
+  writeLn();
+  if (answer === 'n' || answer === 'no') return false;
+  return true;
 }
 
 // ─── shell helpers ───────────────────────────────────────────────────────
@@ -511,11 +538,34 @@ async function stepStartPM2() {
   });
 }
 
+async function stepEnableBootStartup() {
+  return step('enable auto-start on boot', async () => {
+    if (!ctx.autoStart) {
+      return { status: 'skip', detail: 'declined; you can run `pm2 startup` later' };
+    }
+    // On macOS, pm2 writes a user-level launchd plist into
+    // ~/Library/LaunchAgents and loads it without sudo. On Linux, pm2
+    // typically prints a `sudo env PATH=... pm2 startup ...` command for
+    // the user to run; we surface that line as the detail.
+    const args = ['startup'];
+    if (process.platform === 'darwin') args.push('launchd');
+    args.push('-u', os.userInfo().username, '--hp', os.homedir());
+    const r = await runCmd('pm2', args);
+    if (r.ok) return { ok: true, detail: 'launchd entry installed' };
+    const combined = `${r.stdout}\n${r.stderr}`;
+    const sudoLine = combined.split('\n').find((l) => l.trim().startsWith('sudo '));
+    if (sudoLine) {
+      return { status: 'warn', detail: `run manually: ${sudoLine.trim()}` };
+    }
+    return { status: 'warn', detail: 'pm2 startup returned non-zero; run it manually' };
+  });
+}
+
 async function stepSavePM2() {
   return step('save pm2 process list', async () => {
     const r = await runCmd('pm2', ['save']);
     return r.ok
-      ? { ok: true, detail: 'saved (auto-resume on boot)' }
+      ? { ok: true, detail: ctx.autoStart ? 'saved (will resume on boot)' : 'saved' }
       : { status: 'warn', detail: 'pm2 save returned non-zero; you can re-run later' };
   });
 }
@@ -677,6 +727,7 @@ async function main() {
   try {
     await intro();
     ctx.mode = await chooseMode();
+    ctx.autoStart = await chooseAutoStart();
     await stepCheckNode();
     await stepEnsurePM2();
     if (ctx.mode !== 'local') {
@@ -689,6 +740,7 @@ async function main() {
     await stepBuildVite();
     await stepWriteEcosystem();
     await stepStartPM2();
+    await stepEnableBootStartup();
     await stepSavePM2();
     await stepInstallGrCommand();
     await stepOpenBrowser();
