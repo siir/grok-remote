@@ -8,7 +8,6 @@ import * as models    from './models.js';
 import * as health    from './health.js';
 import * as sessions  from './sessions.js';
 import * as importV   from './import.js';
-import * as flow      from './flow.js';
 import * as setup     from './setup.js';
 import * as skills    from './skills.js';
 import * as hooks        from './hooks.js';
@@ -35,11 +34,10 @@ export interface SettingsSection {
 }
 
 export const SYSTEM_PAGES: PageEntry[] = [
-  { area: 'memory',   label: 'memory',    iconName: 'memory',   module: memory   as PageModule },
-  { area: 'leaders',  label: 'leaders',   iconName: 'leaders',  module: leaders  as PageModule },
-  { area: 'sessions', label: 'sessions',  iconName: 'sessions', module: sessions as PageModule },
-  { area: 'health',   label: 'health',    iconName: 'health',   module: health   as PageModule },
-  { area: 'flow',     label: 'live flow', iconName: 'flow',     module: flow     as PageModule },
+  { area: 'memory',   label: 'memory',   iconName: 'memory',   module: memory   as PageModule },
+  { area: 'leaders',  label: 'leaders',  iconName: 'leaders',  module: leaders  as PageModule },
+  { area: 'sessions', label: 'sessions', iconName: 'sessions', module: sessions as PageModule },
+  { area: 'health',   label: 'health',   iconName: 'health',   module: health   as PageModule },
 ];
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [

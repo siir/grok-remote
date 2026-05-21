@@ -4263,7 +4263,6 @@ body::before {
 .left-rail-item {
   width: 56px;
   min-height: 52px;
-  border-radius: 8px;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
@@ -4272,8 +4271,10 @@ body::before {
   padding: 6px 4px;
   color: var(--muted);
   text-decoration: none;
-  border: 1px solid transparent;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  transition: color 0.12s;
   position: relative;
 }
 .left-rail-icon {
@@ -4303,23 +4304,19 @@ body::before {
 }
 .left-rail-item:hover {
   color: var(--text);
-  background: var(--panel);
-  border-color: var(--border-2);
 }
 .left-rail-item--active {
   color: var(--teal);
-  background: rgba(94, 234, 212, 0.10);
-  border-color: var(--teal);
 }
 .left-rail-item--active::before {
   /* slim teal indicator on the left edge, like VS Code's activity bar */
   content: "";
   position: absolute;
-  left: -8px;
+  left: 0;
   top: 8px;
   bottom: 8px;
   width: 2px;
-  border-radius: 2px;
+  border-radius: 0 2px 2px 0;
   background: var(--teal);
 }
 .left-rail {
