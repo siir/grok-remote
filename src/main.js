@@ -16,6 +16,7 @@ import { SettingsView } from './views/settings.js';
 import { el } from './lib/render.js';
 import { registerPwa } from './lib/pwa.js';
 import { applyTheme, getTheme, nextTheme, getThemeMeta } from './lib/themes.js';
+import { installVersionFooter } from './lib/version-footer.js';
 import { SYSTEM_PAGES, getSystemPage } from './views/system/index.js';
 import { iconHtml } from './lib/icons.js';
 
@@ -379,6 +380,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // wire PWA install banner + service worker.
   registerPwa();
+
+  // install the bottom-of-app version footer. Lives as a sibling of #app so
+  // it spans the full viewport width on desktop and mobile.
+  installVersionFooter();
 });
 
 // ── Outer split (sidebar vs main) via Split.js ───────────────────────────

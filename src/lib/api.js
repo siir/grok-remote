@@ -225,4 +225,13 @@ export const api = {
     list: ()        => request('GET',  '/api/system/import'),
     run:  (targets) => request('POST', '/api/system/import', { targets: Array.isArray(targets) ? targets : [] }),
   },
+
+  // Self-update. /api/version/update is a POST SSE stream; consumers should
+  // use the URL with a fetch + ReadableStream, not this object.
+  version: {
+    current:    () => request('GET', '/api/version/current'),
+    latest:     () => request('GET', '/api/version/latest'),
+    diff:       () => request('GET', '/api/version/diff'),
+    updateUrl:  () => '/api/version/update',
+  },
 };

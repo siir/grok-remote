@@ -142,6 +142,33 @@ export const ICONS = {
     <path d="M10 3a10 10 0 0 1 0 14"/>
     <path d="M10 3a10 10 0 0 0 0 14"/>
   `),
+
+  // refresh-cw, used for the update-now button
+  'refresh-cw': wrap(`
+    <path d="M17 4v4h-4"/>
+    <path d="M3 16v-4h4"/>
+    <path d="M5.5 8.5A6 6 0 0 1 16 7"/>
+    <path d="M14.5 11.5A6 6 0 0 1 4 13"/>
+  `),
+
+  // download-cloud, used for the up-to-date indicator
+  'download-cloud': wrap(`
+    <path d="M5.5 14.5A4 4 0 0 1 6 6.6 5 5 0 0 1 15.9 7.5 3.5 3.5 0 0 1 14.5 14.5"/>
+    <path d="M10 9v6"/>
+    <path d="M7.5 12.5L10 15l2.5-2.5"/>
+  `),
+
+  // check (small tick) for completed step rows
+  check: wrap(`
+    <path d="M4 10.5l3.5 3.5L16 5.5"/>
+  `),
+
+  // x-circle for failed step rows
+  'x-circle': wrap(`
+    <circle cx="10" cy="10" r="7"/>
+    <path d="M7.5 7.5l5 5"/>
+    <path d="M12.5 7.5l-5 5"/>
+  `),
 };
 
 export function iconHtml(name) {
