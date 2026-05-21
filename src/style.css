@@ -8302,3 +8302,45 @@ body::before {
   .image-lightbox { padding: 12px; }
   .image-lightbox__close { top: 8px; right: 8px; }
 }
+
+/* ── chat tab actions cluster (star / settings / disconnect / copy) ─── */
+
+/* Wraps the four right-hand actions into a single visually-grouped
+   segmented row: same height, same border treatment, tighter gap, with
+   the outer cluster getting a rounded border so internal joins read as
+   intentional rather than four mismatched buttons. */
+.tab-actions-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+.tab-actions-group .tab-action {
+  margin-bottom: 0;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  line-height: 1;
+  height: 24px;
+  border-radius: 5px;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab-actions-group .tab-action--icon-only {
+  width: 24px;
+  padding: 0;
+  gap: 0;
+}
+.tab-actions-group .tab-action--icon-only .tab-action-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+.tab-actions-group .tab-action--icon-only .tab-action-ico svg {
+  width: 13px;
+  height: 13px;
+}

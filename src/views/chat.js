@@ -268,23 +268,23 @@ export class ChatView {
       flow:         make('flow',         'Flow'),
     };
     const starBtn = el('button', {
-      class: 'chat-star tab-action tab-action--icon',
+      class: 'chat-star tab-action tab-action--icon-only',
       type: 'button',
       title: 'Star this conversation',
       'aria-label': 'star conversation',
       onclick: () => this.toggleStar(),
     });
-    starBtn.innerHTML = `<span class="tab-action-ico">${iconHtml('star')}</span><span class="tab-action-text">star</span>`;
+    starBtn.innerHTML = `<span class="tab-action-ico">${iconHtml('star')}</span>`;
     this.starBtn = starBtn;
 
     const settingsBtn = el('button', {
-      class: 'chat-settings tab-action tab-action--icon',
+      class: 'chat-settings tab-action tab-action--icon-only',
       type: 'button',
       title: 'Per-conversation grok settings (model, reasoning effort, rules, ...)',
       'aria-label': 'open settings drawer',
       onclick: () => this.toggleSettingsDrawer(),
     });
-    settingsBtn.innerHTML = `<span class="tab-action-ico">${iconHtml('settings')}</span><span class="tab-action-text">settings</span>`;
+    settingsBtn.innerHTML = `<span class="tab-action-ico">${iconHtml('settings')}</span>`;
     this.settingsBtn = settingsBtn;
     this.connectBtn = el('button', {
       class: 'tab-action tab-action--toggle',
@@ -297,7 +297,7 @@ export class ChatView {
       type: 'button',
       title: 'Copy entire conversation as plain text',
       onclick: () => this.copyConversation(),
-    }, 'copy conversation');
+    }, 'copy');
     this.tokensPill = el('span', { class: 'tab-tokens', hidden: true });
     this.inflightPill = el('span', { class: 'tab-inflight', hidden: true });
     return el('nav', { class: 'tabs' },
@@ -309,10 +309,12 @@ export class ChatView {
       el('span', { class: 'tabs-spacer' }),
       this.inflightPill,
       this.tokensPill,
-      this.starBtn,
-      this.settingsBtn,
-      this.connectBtn,
-      this.copyConvoBtn,
+      el('div', { class: 'tab-actions-group' },
+        this.starBtn,
+        this.settingsBtn,
+        this.connectBtn,
+        this.copyConvoBtn,
+      ),
     );
   }
 
@@ -375,8 +377,11 @@ export class ChatView {
     if (!this.starBtn) return;
     const on = !!(this.currentAgent && this.currentAgent.starred);
     this.starBtn.classList.toggle('is-on', on);
-    this.starBtn.textContent = on ? '★' : '☆';
+    // Don't overwrite textContent: the SVG icon lives in the inner
+    // .tab-action-ico span. The .is-on class drives the filled vs.
+    // outlined visual via CSS.
     this.starBtn.title = on ? 'Unstar this conversation' : 'Star this conversation';
+    this.starBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
 
   async toggleConnection() {
