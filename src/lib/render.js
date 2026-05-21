@@ -149,6 +149,16 @@ function renderUserAttachments(attachments, agentId) {
       target: '_blank',
       rel: 'noopener noreferrer',
       title: att.name,
+      onclick: (ev) => {
+        // Intercept left-click to open the lightbox. Cmd/Ctrl/middle-click
+        // and right-click "Open in new tab" still navigate via the href.
+        if (ev.button !== 0) return;
+        if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+        ev.preventDefault();
+        // Lazy import so the chat hot-path bundle doesn't pull in lightbox
+        // chrome until the first click actually happens.
+        import('./image-lightbox.js').then((m) => m.openImageLightbox(att.src, att.name));
+      },
     },
       el('img', {
         class: 'msg-attachment-thumb',
