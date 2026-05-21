@@ -21,6 +21,13 @@ import { writeHeaders as sseHeaders, writeEvent as sseWrite, writePing as ssePin
 import { buildTrace, buildTraceForSessionId } from './lib/trace-host.js';
 import { handleSystem } from './lib/routes/system.js';
 import { runGrokText, errorToResponse } from './lib/grok-cli.js';
+import {
+  readCurrentVersion,
+  readLatestVersion,
+  readDiff as readVersionDiff,
+  runUpdate as runVersionUpdate,
+  isUpdateInProgress,
+} from './lib/version-update.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -146,6 +153,38 @@ async function handleApi(req, res, url, method) {
 
   if (url === '/api/health' && method === 'GET') {
     return sendJson(res, 200, { ok: true, version: APP_VERSION, uptime_seconds: Math.floor(process.uptime()) });
+  }
+
+  // ── self-update endpoints ────────────────────────────────────────────
+  if (url === '/api/version/current' && method === 'GET') {
+    try {
+      const data = await readCurrentVersion();
+      return sendJson(res, 200, data);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message });
+    }
+  }
+  if (url === '/api/version/latest' && method === 'GET') {
+    try {
+      const data = await readLatestVersion();
+      return sendJson(res, 200, data);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message });
+    }
+  }
+  if (url === '/api/version/diff' && method === 'GET') {
+    try {
+      const data = await readVersionDiff();
+      return sendJson(res, 200, data);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message });
+    }
+  }
+  if (url === '/api/version/update' && method === 'POST') {
+    if (isUpdateInProgress()) {
+      return sendJson(res, 409, { ok: false, error: 'update already in progress' });
+    }
+    return handleVersionUpdateStream(req, res);
   }
 
   if (url === '/api/settings' && method === 'GET') {
@@ -1011,6 +1050,49 @@ function handleTerminalKill(req, res, rec, tid) {
   bg.endedAt   = Date.now();
   try { manager.emit('list_changed', { event: 'bg_tasks', id: rec.id, count: 0 }); } catch { /* ignore */ }
   return sendJson(res, 200, { ok: true, source: 'grok', killed: true });
+}
+
+function handleVersionUpdateStream(req, res) {
+  // POST /api/version/update returns an SSE stream of { step, status, detail }
+  // events. The final restart step triggers pm2 to SIGTERM us; the connection
+  // dies mid-flight and the frontend polls /api/health to detect recovery.
+  sseHeaders(res);
+  let counter = 0;
+  const send = (data) => {
+    sseWrite(res, {
+      id: `vupd-${Date.now()}-${++counter}`,
+      event: 'update',
+      data,
+    });
+  };
+  // Initial hello so the client sees the channel is live before the first
+  // step lands (preflight can take a moment if git is slow).
+  send({ step: 'open', status: 'ok', detail: 'connected' });
+
+  const heartbeat = setInterval(() => ssePing(res), 5000);
+  let closed = false;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    if (!res.writableEnded) try { res.end(); } catch { /* ignore */ }
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+
+  runVersionUpdate({
+    emit: (ev) => { if (!closed) send(ev); },
+  }).then(() => {
+    if (!closed) {
+      send({ step: 'done', status: 'ok', detail: 'all steps completed' });
+      cleanup();
+    }
+  }).catch((err) => {
+    if (!closed) {
+      send({ step: 'done', status: 'fail', detail: err && err.message || String(err) });
+      cleanup();
+    }
+  });
 }
 
 function handleAgentsStream(req, res) {
