@@ -17,7 +17,7 @@ import { el } from './lib/render.js';
 import { registerPwa } from './lib/pwa.js';
 import { applyTheme, getTheme, nextTheme, getThemeMeta } from './lib/themes.js';
 import { installVersionFooter } from './lib/version-footer.js';
-import { SYSTEM_PAGES, getSystemPage } from './views/system/index.js';
+import { SYSTEM_PAGES, getSystemPage, getSettingsPage } from './views/system/index.js';
 import { iconHtml } from './lib/icons.js';
 
 // Apply persisted theme as early as possible (before any DOM is drawn) so the
@@ -73,10 +73,16 @@ async function pingHello() {
 
 // Top-level "areas" outside the conversation flow. Each key matches the
 // first hash segment and a system view module under src/views/system/.
-const SYSTEM_AREAS = new Set([
-  'mcp', 'memory', 'models', 'leaders', 'worktrees',
-  'sessions', 'import', 'health', 'flow', 'setup', 'skills',
-  'subagents', 'hooks', 'plugins', 'marketplaces', 'lsp',
+// SYSTEM_AREAS are top-level nav items rendered on the left rail.
+const SYSTEM_AREAS = new Set(SYSTEM_PAGES.map((p) => p.area));
+
+// SETTINGS_AREAS are the sub-pages under #/settings/<area>. They also
+// double as legacy redirect targets: visiting an old #/<area> URL gets
+// rewritten to #/settings/<area>.
+const SETTINGS_AREAS = new Set([
+  'general',
+  'skills', 'subagents', 'hooks', 'plugins', 'marketplaces',
+  'mcp', 'lsp', 'models', 'worktrees', 'import', 'setup',
 ]);
 
 function parseRoute() {
@@ -84,8 +90,16 @@ function parseRoute() {
   const parts = h.split('/').filter(Boolean);
   if (!parts.length) return { name: 'home' };
   if (parts[0] === 'agents' && parts[1]) return { name: 'chat', agentId: parts[1] };
-  if (parts[0] === 'settings') return { name: 'settings' };
+  if (parts[0] === 'settings') {
+    return { name: 'settings', sub: parts[1] || 'general' };
+  }
   if (SYSTEM_AREAS.has(parts[0])) return { name: 'system', area: parts[0], parts };
+  // Legacy / external links: an old #/<area> URL that's now a settings
+  // sub-page gets rewritten in-place. The hashchange listener will fire
+  // again on the new URL and route properly.
+  if (SETTINGS_AREAS.has(parts[0])) {
+    return { name: 'redirect', to: `#/settings/${parts[0]}` };
+  }
   return { name: 'home' };
 }
 
@@ -267,20 +281,40 @@ function mountDashboard() {
     }
   });
 
+  let activeSettings = false;
+
   function unmountActiveSystemPage() {
     if (!activeSystemPage) return;
     try { activeSystemPage.module.unmount?.(); } catch { /* ignore */ }
     activeSystemPage = null;
   }
+  function unmountActiveSettings() {
+    if (!activeSettings) return;
+    try { settings.unmount(); } catch { /* ignore */ }
+    activeSettings = false;
+  }
 
   function renderRoute() {
     const route = parseRoute();
+    if (route.name === 'redirect') {
+      // Replace, not assign, so the bad URL doesn't pollute history.
+      location.replace(location.pathname + location.search + route.to);
+      return;
+    }
+    // Same-area shortcut: navigating within #/settings/* swaps the
+    // sub-page without remounting the shell.
+    if (route.name === 'settings' && activeSettings) {
+      updateRailHighlight(route);
+      settings.setActive(route.sub);
+      return;
+    }
     // Unmount the previous system page FIRST so its teardown (e.g.
     // ReactFlow's root.unmount) runs against the DOM it still owns. Wiping
     // mainHost first triggers React's "node to be removed is not a child"
     // NotFoundError because the nodes are already gone by the time React
     // tries to reconcile.
     unmountActiveSystemPage();
+    unmountActiveSettings();
     mainHost.replaceChildren();
     updateRailHighlight(route);
     if (route.name === 'system') {
@@ -294,6 +328,8 @@ function mountDashboard() {
     }
     if (route.name === 'settings') {
       settings.mount(mainHost);
+      settings.setActive(route.sub);
+      activeSettings = true;
       return;
     }
     if (route.name === 'chat') {

@@ -704,7 +704,7 @@ export class ChatView {
       banner.innerHTML = `
         <span class="skill-banner-ico">${iconHtml('skills')}</span>
         <span class="skill-banner-label">invoked skill</span>
-        <a class="skill-banner-name" href="#/skills">/${name}</a>
+        <a class="skill-banner-name" href="#/settings/skills">/${name}</a>
       `;
       turn._skillBanner = banner;
       // Banner sits ABOVE the user bubble so the chronology reads:

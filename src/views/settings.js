@@ -1,9 +1,21 @@
-// Settings view: default model, default cwd, auto-approve, theme.
-// Saves via PATCH /api/settings.
+// Settings view.
+//
+// Two-pane shell:
+//   - left: sub-nav grouped by section (general, native config, tools)
+//   - right: active sub-page content
+//
+// The "general" sub-page is the original settings form (default model,
+// default cwd, auto-approve, debug, retention, theme). Every other
+// sub-page is one of the system page modules (plugins, hooks,
+// marketplaces, etc.), mounted into the content host via its existing
+// mount(container) / unmount() API. SettingsView never knows what's
+// inside those pages.
 
 import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
+import { iconHtml } from '../lib/icons.js';
 import { THEMES, getTheme, setTheme } from '../lib/themes.js';
+import { SETTINGS_SECTIONS, getSettingsPage } from './system/index.js';
 
 function clampInt(raw, min, max, fallback) {
   const n = parseInt(String(raw).trim(), 10);
@@ -16,56 +28,156 @@ export class SettingsView {
     this.settings = {};
     this.models   = [];
 
+    this._activeArea     = 'general';
+    this._mountedModule  = null;       // the system-page module currently
+                                        // owning the content host, if any
+    this._navButtons     = new Map();  // area -> button (for active state)
+
+    this._buildGeneralFormPieces();
+    this.generalForm = this._buildGeneralFormRoot();
+
+    this.contentHost = el('div', { class: 'settings-content' });
+    this.subnav = this._buildSubnav();
+
+    this.root = el('section', { class: 'settings-shell' },
+      this.subnav,
+      this.contentHost,
+    );
+  }
+
+  // ── public lifecycle (called by main.js router) ──────────────────────
+
+  mount(parent) {
+    if (this.root.parentNode !== parent) {
+      parent.appendChild(this.root);
+    }
+    // mount() does not pick a sub-page on its own; the router calls
+    // setActive() right after to apply the route's sub.
+  }
+
+  unmount() {
+    this._teardownMountedModule();
+    if (this.root.parentNode) this.root.parentNode.removeChild(this.root);
+  }
+
+  // Switch the active sub-page. Cheap to call repeatedly with the same
+  // area: returns early.
+  setActive(area) {
+    const next = area || 'general';
+    if (next === this._activeArea && this.contentHost.children.length) return;
+    this._activeArea = next;
+    this._refreshSubnavActive();
+    this._renderActive();
+  }
+
+  // ── sub-nav ──────────────────────────────────────────────────────────
+
+  _buildSubnav() {
+    const nav = el('nav', { class: 'settings-subnav', 'aria-label': 'settings sections' });
+    for (const section of SETTINGS_SECTIONS) {
+      nav.appendChild(el('div', { class: 'settings-subnav__section-title' }, section.title));
+      const list = el('ul', { class: 'settings-subnav__list' });
+      for (const item of section.items) {
+        const btn = el('a', {
+          class: 'settings-subnav__item',
+          href: `#/settings/${item.area}`,
+          'data-area': item.area,
+        },
+          el('span', { class: 'settings-subnav__ico', innerHTML: iconHtml(item.iconName || 'settings') }),
+          el('span', { class: 'settings-subnav__lbl' }, item.label),
+        );
+        this._navButtons.set(item.area, btn);
+        list.appendChild(el('li', {}, btn));
+      }
+      nav.appendChild(list);
+    }
+    return nav;
+  }
+
+  _refreshSubnavActive() {
+    for (const [area, btn] of this._navButtons) {
+      btn.classList.toggle('settings-subnav__item--active', area === this._activeArea);
+    }
+  }
+
+  // ── content rendering ────────────────────────────────────────────────
+
+  _renderActive() {
+    this._teardownMountedModule();
+    this.contentHost.replaceChildren();
+
+    if (this._activeArea === 'general') {
+      this.contentHost.appendChild(this.generalForm);
+      this.refreshThemePicker();
+      this.load();
+      return;
+    }
+
+    const page = getSettingsPage(this._activeArea);
+    if (!page || !page.module || typeof page.module.mount !== 'function') {
+      this.contentHost.appendChild(
+        el('div', { class: 'pane-empty' }, `no view for "${this._activeArea}"`),
+      );
+      return;
+    }
+    page.module.mount(this.contentHost, { area: this._activeArea });
+    this._mountedModule = page.module;
+  }
+
+  _teardownMountedModule() {
+    if (!this._mountedModule) return;
+    if (typeof this._mountedModule.unmount === 'function') {
+      try { this._mountedModule.unmount(); } catch { /* ignore */ }
+    }
+    this._mountedModule = null;
+  }
+
+  // ── general settings form (the legacy SettingsView content) ──────────
+
+  _buildGeneralFormPieces() {
     this.modelInput   = el('input', { class: 'inp', type: 'text', placeholder: 'grok-build' });
     this.modelSelect  = null;
     this.cwdInput     = el('input', { class: 'inp', type: 'text', placeholder: '/path/to/working/dir' });
     this.autoApprove  = el('input', { type: 'checkbox' });
     this.debugToggle  = el('input', { type: 'checkbox' });
-    this.retentionInput = el('input', { class: 'inp inp--num', type: 'number', min: '0', max: '3650', step: '1', placeholder: '30' });
-    this.themePicker = this.buildThemePicker();
-
+    this.retentionInput = el('input', {
+      class: 'inp inp--num', type: 'number', min: '0', max: '3650', step: '1', placeholder: '30',
+    });
+    this.themePicker = this._buildThemePicker();
     this.statusEl = el('div', { class: 'settings-status' });
 
     this.saveBtn = el('button', {
       class: 'btn btn--primary',
       onclick: (ev) => { ev.preventDefault(); this.save(); },
     }, 'save');
-
     this.reloadBtn = el('button', {
       class: 'btn btn--ghost',
       onclick: (ev) => { ev.preventDefault(); this.load(); },
     }, 'reload');
 
     this.modelFieldHost = el('div', { class: 'field-host' }, this.modelInput);
+  }
 
-    this.root = el('section', { class: 'settings' },
-      el('h2', { class: 'settings-title' }, 'settings'),
+  _buildGeneralFormRoot() {
+    return el('section', { class: 'settings' },
+      el('h2', { class: 'settings-title' }, 'general'),
       this.statusEl,
 
-      this.field('default model',
-        this.modelFieldHost,
+      this.field('default model', this.modelFieldHost,
         'used when you spawn a new agent without specifying one.'),
-
-      this.field('default cwd',
-        this.cwdInput,
+      this.field('default cwd', this.cwdInput,
         'fallback working directory for new agents.'),
-
       this.field('auto-approve tools',
         el('label', { class: 'toggle' }, this.autoApprove,
           el('span', { class: 'toggle-text' }, 'on')),
         'server already passes --always-approve. shown here for visibility.'),
-
       this.field('debug controls',
         el('label', { class: 'toggle' }, this.debugToggle,
           el('span', { class: 'toggle-text' }, 'show developer affordances')),
         'shows the { payload } button in the composer to inspect the exact JSON sent to the agent.'),
-
-      this.field('history retention (days)',
-        this.retentionInput,
+      this.field('history retention (days)', this.retentionInput,
         'agent history under ~/.grok-remote/agents/ is pruned when last activity exceeds this. starred agents are never pruned. 0 disables cleanup. default 30.'),
-
-      this.field('theme',
-        this.themePicker,
+      this.field('theme', this.themePicker,
         'applies instantly. saved in this browser only.'),
 
       el('div', { class: 'settings-actions' }, this.saveBtn, this.reloadBtn),
@@ -78,13 +190,6 @@ export class SettingsView {
       control,
       help ? el('div', { class: 'field-help' }, help) : null,
     );
-  }
-
-  mount(parent) {
-    parent.appendChild(this.root);
-    // Refresh the picker against any external theme changes (e.g. topbar toggle).
-    this.refreshThemePicker();
-    this.load();
   }
 
   refreshThemePicker() {
@@ -141,7 +246,6 @@ export class SettingsView {
         if (id === cur) opt.selected = true;
         sel.appendChild(opt);
       }
-      // Always allow a free-form custom value too.
       const customRow = el('div', { class: 'model-custom' },
         el('span', { class: 'model-custom-label' }, 'or custom:'),
         this.modelInput,
@@ -162,8 +266,6 @@ export class SettingsView {
       autoApprove:  !!this.autoApprove.checked,
       debug:        !!this.debugToggle.checked,
       retentionDays: clampInt(this.retentionInput.value, 0, 3650, 30),
-      // theme is persisted client-side in localStorage by setTheme(); we still
-      // forward it so server-side settings can mirror the preference if useful.
       theme:        getTheme(),
     };
     this.saveBtn.disabled = true;
@@ -172,8 +274,6 @@ export class SettingsView {
       const updated = await api.patchSettings(body);
       this.settings = updated || body;
       this.setStatus('saved', 'ok');
-      // Notify the rest of the app (chat view, etc.) so debug-gated UI
-      // updates without a page reload.
       window.dispatchEvent(new CustomEvent('grok-remote:settings-change', {
         detail: this.settings,
       }));
@@ -191,7 +291,7 @@ export class SettingsView {
     );
   }
 
-  buildThemePicker() {
+  _buildThemePicker() {
     const current = getTheme();
     const grid = el('div', { class: 'theme-grid' });
     this.themeCards = {};
@@ -199,35 +299,26 @@ export class SettingsView {
       const isSel = t.name === current;
       const card = el('label', {
         class: `theme-card${isSel ? ' theme-card--selected' : ''}`,
-        dataset: { theme: t.name },
       },
         el('input', {
           type: 'radio',
           name: 'theme',
           value: t.name,
-          checked: isSel ? 'checked' : null,
-          onchange: () => this.pickTheme(t.name),
+          checked: isSel,
+          onchange: () => {
+            setTheme(t.name);
+            this.refreshThemePicker();
+            window.dispatchEvent(new CustomEvent('grok-remote:theme-change', {
+              detail: { theme: t.name },
+            }));
+          },
         }),
-        el('span', { class: 'theme-card-swatch', style: { background: t.swatch, borderColor: t.accent, color: t.accent } }, '●'),
-        el('span', { class: 'theme-card-body' },
-          el('span', { class: 'theme-card-name' }, t.label),
-          el('span', { class: 'theme-card-blurb' }, t.blurb),
-        ),
+        el('span', { class: 'theme-card-swatch', style: `background: ${t.accent}` }),
+        el('span', { class: 'theme-card-label' }, t.label),
       );
       this.themeCards[t.name] = card;
       grid.appendChild(card);
     }
     return grid;
-  }
-
-  pickTheme(name) {
-    setTheme(name);
-    for (const [k, card] of Object.entries(this.themeCards || {})) {
-      card.classList.toggle('theme-card--selected', k === name);
-      const radio = card.querySelector('input[type="radio"]');
-      if (radio) radio.checked = (k === name);
-    }
-    // notify the topbar toggle so its dot/label re-syncs.
-    window.dispatchEvent(new CustomEvent('grok-remote:theme-change', { detail: { theme: name } }));
   }
 }
