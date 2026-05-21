@@ -67,6 +67,25 @@ test('looksLikeDevServer detects known dev-server commands', () => {
   assert.equal(looksLikeDevServer(null), false);
 });
 
+test('looksLikeDevServer recognizes python http.server with versioned interpreter', () => {
+  // Real-world commands typically use `python3` not `python`.
+  assert.equal(looksLikeDevServer('python3 -m http.server'), true);
+  assert.equal(looksLikeDevServer('python3 -m http.server 8923 --directory .'), true);
+  assert.equal(looksLikeDevServer('python -m http.server'), true);
+  assert.equal(looksLikeDevServer('python2 -m http.server'), true);
+});
+
+test('parsePortFromCommand reads the positional port from python http.server', () => {
+  assert.equal(parsePortFromCommand('python3 -m http.server 8923'), 8923);
+  assert.equal(parsePortFromCommand('python3 -m http.server 8923 --directory .'), 8923);
+  assert.equal(parsePortFromCommand('python -m http.server 4500'), 4500);
+});
+
+test('parsePortFromCommand falls back to 8000 for python http.server with no port', () => {
+  assert.equal(parsePortFromCommand('python3 -m http.server'), 8000);
+  assert.equal(parsePortFromCommand('python3 -m http.server --directory .'), 8000);
+});
+
 test('inferDevServerUrl prefers a matched output URL over a command guess', () => {
   assert.equal(
     inferDevServerUrl('vite --port 9999', 'Local: http://localhost:5173/'),

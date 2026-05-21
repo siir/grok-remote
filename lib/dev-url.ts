@@ -44,7 +44,11 @@ export function parsePortFromCommand(cmd: unknown): number | null {
   if (/\bflask\s+run\b/.test(cmd))                         return 5000;
   if (/\bmanage\.py\s+runserver\b/.test(cmd))              return 8000;
   if (/\buvicorn\b/.test(cmd))                             return 8000;
-  if (/\bpython\s+-m\s+http\.server\b/.test(cmd))          return 8000;
+  if (/\bpython\d*\s+-m\s+http\.server\b/.test(cmd)) {
+    // `python -m http.server [port]` accepts a positional port arg.
+    const hm = cmd.match(/\bhttp\.server\s+(\d{2,5})\b/);
+    return hm && hm[1] ? Number(hm[1]) : 8000;
+  }
   if (/\brails\s+(?:s|server)\b/.test(cmd))                return 3000;
   if (/\bphx\.server\b/.test(cmd))                         return 4000;
   if (/\bjekyll\s+serve\b/.test(cmd))                      return 4000;
@@ -59,7 +63,7 @@ export function parsePortFromCommand(cmd: unknown): number | null {
   return null;
 }
 
-const DEV_HINTS = /\b(?:vite|next\s+(?:dev|start)|nuxt\s+dev|astro\s+dev|svelte-kit\s+dev|remix\s+dev|gatsby\s+develop|npm\s+(?:run\s+)?(?:dev|start|serve)|(?:pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve)|streamlit\s+run|flask\s+run|manage\.py\s+runserver|uvicorn|gunicorn|python\s+-m\s+http\.server|rails\s+(?:s|server)|phx\.server|jekyll\s+serve|php\s+artisan\s+serve|php\s+-S|caddy\s+(?:run|start)|http-server|\bserve\b)/;
+const DEV_HINTS = /\b(?:vite|next\s+(?:dev|start)|nuxt\s+dev|astro\s+dev|svelte-kit\s+dev|remix\s+dev|gatsby\s+develop|npm\s+(?:run\s+)?(?:dev|start|serve)|(?:pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve)|streamlit\s+run|flask\s+run|manage\.py\s+runserver|uvicorn|gunicorn|python\d*\s+-m\s+http\.server|rails\s+(?:s|server)|phx\.server|jekyll\s+serve|php\s+artisan\s+serve|php\s+-S|caddy\s+(?:run|start)|http-server|\bserve\b)/;
 
 export function looksLikeDevServer(cmd: unknown): boolean {
   if (!cmd || typeof cmd !== 'string') return false;
