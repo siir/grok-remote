@@ -35,6 +35,12 @@ import {
   type UpdateStepEvent,
 } from './lib/version-update.js';
 import { browseDirectory } from './lib/fs-browse.js';
+import {
+  authorizeRequest,
+  authorizeAdmin,
+  authToken,
+  jailRoot,
+} from './lib/security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -220,6 +226,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: string,
     return;
   }
   if (url === '/api/version/update' && method === 'POST') {
+    const admin = authorizeAdmin(req);
+    if (!admin.ok) {
+      sendJson(res, admin.status, { ok: false, error: admin.error });
+      return;
+    }
     if (isUpdateInProgress()) {
       sendJson(res, 409, { ok: false, error: 'update already in progress' });
       return;
@@ -1223,20 +1234,26 @@ function handleTerminalKill(_req2: IncomingMessage, res: ServerResponse, rec: Pu
   const bg = a && a.bgTasks && a.bgTasks.get(tid);
   if (!bg) { sendJson(res, 404, { ok: false, error: 'terminal not found' }); return; }
   if (bg.completed) { sendJson(res, 200, { ok: true, alreadyExited: true }); return; }
-  const cwd = bg.cwd || '';
-  if (!cwd) { sendJson(res, 500, { ok: false, error: 'task has no cwd; cannot derive kill pattern' }); return; }
-  try {
-    spawnSync('/usr/bin/pkill', ['-TERM', '-f', cwd], { timeout: 4000 });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    sendJson(res, 500, { ok: false, error: `pkill failed: ${msg}` });
-    return;
+  // Never pkill -f <cwd> (substring match can kill unrelated processes).
+  // Best-effort: if we have a recorded PID, kill that process group only.
+  const pid = typeof (bg as { pid?: unknown }).pid === 'number'
+    ? (bg as { pid: number }).pid
+    : null;
+  if (pid && pid > 1) {
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      try { process.kill(pid, 'SIGTERM'); } catch { /* ignore */ }
+    }
+  } else {
+    // No PID: mark completed without host-wide pkill.
+    process.stderr.write(`[terminal-kill] bg task ${tid} has no pid; marking completed without pkill\n`);
   }
   bg.completed = true;
   bg.signal    = bg.signal || 'killed-by-user';
   bg.endedAt   = Date.now();
   try { manager.emit('list_changed', { event: 'bg_tasks', id: rec.id, count: 0 }); } catch { /* ignore */ }
-  sendJson(res, 200, { ok: true, source: 'grok', killed: true });
+  sendJson(res, 200, { ok: true, source: 'grok', killed: true, pid });
 }
 
 function handleVersionUpdateStream(req: IncomingMessage, res: ServerResponse): void {
@@ -1338,6 +1355,23 @@ function handleStream(req: IncomingMessage, res: ServerResponse, id: string): vo
 
 const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
   const url = (req.url || '').split('?')[0] || '/';
+
+  // Auth for all /api/* (static assets stay public for the SPA shell).
+  // Loopback is always allowed so agent-fleet LAUNCH_MODE=remote on the same
+  // host keeps working without a token (see docs/CLIENT_CONTRACT.md).
+  if (url.startsWith('/api/')) {
+    // Health stays reachable without token even on non-loopback so probes work;
+    // it does not mutate state.
+    const isHealth = (url === '/api/health' || url === '/api/hello') && (req.method || 'GET') === 'GET';
+    if (!isHealth) {
+      const auth = authorizeRequest(req);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { ok: false, error: auth.error });
+        return;
+      }
+    }
+  }
+
   if (url.startsWith('/api/system/')) {
     try {
       await handleSystem(req, res, url);
@@ -1370,6 +1404,13 @@ server.listen(PORT, HOST, () => {
   const where = ts?.dns ? `http://${ts.dns}:${PORT}` : `http://${HOST}:${PORT}`;
   console.log(`[grok-remote] listening on ${HOST}:${PORT}`);
   console.log(`[grok-remote] tailnet url: ${where}`);
+  console.log(`[grok-remote] cwd/browse jail: ${jailRoot() || '(disabled)'}`);
+  if (authToken()) {
+    console.log('[grok-remote] GROK_REMOTE_TOKEN set: non-loopback requests require the token');
+  } else {
+    console.log('[grok-remote] WARNING: no GROK_REMOTE_TOKEN — non-loopback API is open (fleet loopback still preferred)');
+  }
+  console.log('[grok-remote] client contract: docs/CLIENT_CONTRACT.md (agent-fleet frozen)');
 });
 
 let shuttingDown = false;

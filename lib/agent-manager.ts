@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events';
 import { AcpClient, type AcpClientSettings } from './acp-client.js';
 import { ensureAgentDirs, agentDir, historyPath, append as historyAppend } from './history.js';
 import { createRing, type SseRing, type SseRingEntry } from './sse.js';
+import { assertCwdAllowed } from './security.js';
 
 const SSE_RING_LIMIT = 200;
 const AGENTS_ROOT = path.join(os.homedir(), '.grok-remote', 'agents');
@@ -694,18 +695,8 @@ export class AgentManager extends EventEmitter {
     const dir = agentDir(id);
     let workCwd: string;
     if (cwd != null && String(cwd).trim()) {
-      const resolved = path.resolve(String(cwd).trim());
-      if (!fs.existsSync(resolved)) {
-        throw new Error(`cwd does not exist: ${resolved}`);
-      }
-      let st: fs.Stats;
-      try { st = fs.statSync(resolved); } catch {
-        throw new Error(`cwd not accessible: ${resolved}`);
-      }
-      if (!st.isDirectory()) {
-        throw new Error(`cwd is not a directory: ${resolved}`);
-      }
-      workCwd = resolved;
+      // Jail under $HOME (or GROK_REMOTE_JAIL). Fleet REPO_DIR under home is ok.
+      workCwd = assertCwdAllowed(String(cwd).trim());
     } else {
       workCwd = path.join(dir, 'cwd');
     }

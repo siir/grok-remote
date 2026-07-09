@@ -1,5 +1,7 @@
 # grok CLI reference
 
+Also see **[CLIENT_CONTRACT.md](./CLIENT_CONTRACT.md)** — frozen HTTP API for **agent-fleet** (`LAUNCH_MODE=remote`) and other control-plane clients.
+
 Per-command docs for the `grok` binary, captured against:
 
 ```
