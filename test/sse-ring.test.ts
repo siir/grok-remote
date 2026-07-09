@@ -12,6 +12,7 @@ test('createRing starts empty', () => {
   const ring = createRing<Entry>();
   assert.equal(ring.size(), 0);
   assert.deepEqual(ring.all(), []);
+  assert.equal(ring.latestId(), null);
 });
 
 test('push appends entries in order', () => {
@@ -21,6 +22,7 @@ test('push appends entries in order', () => {
   ring.push({ id: 3, body: 'c' });
   assert.equal(ring.size(), 3);
   assert.deepEqual(ring.all().map((e) => e.id), [1, 2, 3]);
+  assert.equal(ring.latestId(), 3);
 });
 
 test('ring evicts oldest entries when capacity is exceeded', () => {
@@ -28,6 +30,7 @@ test('ring evicts oldest entries when capacity is exceeded', () => {
   for (let i = 1; i <= 5; i++) ring.push({ id: i });
   assert.equal(ring.size(), 3);
   assert.deepEqual(ring.all().map((e) => e.id), [3, 4, 5]);
+  assert.equal(ring.latestId(), 5);
 });
 
 test('since returns everything after the given id', () => {
@@ -36,21 +39,23 @@ test('since returns everything after the given id', () => {
   assert.deepEqual(ring.since(2).map((e) => e.id), [3, 4]);
 });
 
-test('since returns the full buffer when lastId is null, undefined, or empty', () => {
+test('since returns empty when lastId is null, undefined, or empty', () => {
+  // Fresh chat open must not dump the ring (history already rendered it).
   const ring = createRing<Entry>();
   ring.push({ id: 1 });
   ring.push({ id: 2 });
-  assert.deepEqual(ring.since(null).map((e) => e.id),      [1, 2]);
-  assert.deepEqual(ring.since(undefined).map((e) => e.id), [1, 2]);
-  assert.deepEqual(ring.since('').map((e) => e.id),        [1, 2]);
+  assert.deepEqual(ring.since(null).map((e) => e.id),      []);
+  assert.deepEqual(ring.since(undefined).map((e) => e.id), []);
+  assert.deepEqual(ring.since('').map((e) => e.id),        []);
 });
 
-test('since returns the full buffer when lastId is not found', () => {
-  // Reconnecting clients may carry a stale id that the server has since
-  // evicted. Replaying everything is safer than dropping events silently.
+test('since returns empty when lastId is not found (evicted cursor)', () => {
+  // Replaying the whole ring on a stale Last-Event-ID doubles history in the UI.
+  // Client already has GET /history; empty gap-fill is the safe default.
   const ring = createRing<Entry>(3);
   for (let i = 1; i <= 5; i++) ring.push({ id: i });
-  assert.deepEqual(ring.since(1).map((e) => e.id), [3, 4, 5]);
+  assert.deepEqual(ring.since(1).map((e) => e.id), []);
+  assert.deepEqual(ring.since(3).map((e) => e.id), [4, 5]);
 });
 
 test('since coerces ids to strings before comparison', () => {

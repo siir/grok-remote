@@ -49,12 +49,19 @@ export function writePing(res: ServerResponse): void {
 
 export interface SseRing<T extends SseRingEntry> {
   push(item: T): void;
+  /**
+   * Events after `lastId`. Empty lastId → empty (caller must not dump the
+   * whole ring on a fresh chat open). Unknown lastId → empty too so a
+   * rotated ring never re-applies 200 stale chunks on top of history.
+   */
   since(lastId: string | number | null | undefined): T[];
+  /** Full buffer (debug / tests). Prefer `since` for gap-fill. */
   all(): T[];
   size(): number;
+  latestId(): string | number | null;
 }
 
-// Ring buffer to support Last-Event-ID replay.
+// Ring buffer to support Last-Event-ID / ?since= cursor gap-fill.
 export function createRing<T extends SseRingEntry>(limit = 200): SseRing<T> {
   const buf: T[] = [];
   return {
@@ -63,12 +70,16 @@ export function createRing<T extends SseRingEntry>(limit = 200): SseRing<T> {
       if (buf.length > limit) buf.splice(0, buf.length - limit);
     },
     since(lastId: string | number | null | undefined): T[] {
-      if (lastId == null || lastId === '') return buf.slice();
+      if (lastId == null || lastId === '') return [];
       const idx = buf.findIndex((e) => String(e.id) === String(lastId));
-      if (idx < 0) return buf.slice();
+      if (idx < 0) return [];
       return buf.slice(idx + 1);
     },
     all(): T[] { return buf.slice(); },
     size(): number { return buf.length; },
+    latestId(): string | number | null {
+      if (!buf.length) return null;
+      return buf[buf.length - 1]!.id;
+    },
   };
 }

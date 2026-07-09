@@ -64,7 +64,11 @@ interface AgentRecord extends AgentMeta {
   _lastTokenEmit?: number;
   /** ACP replay event ids already written to history (skip on reconnect). */
   _seenAcpEventIds?: Set<string>;
+  /** Throttle disk writes for lastSeen. */
+  _lastMetaWriteMs?: number;
 }
+
+const LAST_SEEN_META_THROTTLE_MS = 60_000;
 
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -465,9 +469,17 @@ export class AgentManager extends EventEmitter {
       const wrapped: AgentRingEntry = { id: eventId, event, data: { ...data, _t: Date.now() } };
       record.ring.push(wrapped);
       record.lastSeen = nowIso();
+      // Persist lastSeen on a throttle so retention sees real activity after restart.
+      const now = Date.now();
+      if (!record._lastMetaWriteMs || (now - record._lastMetaWriteMs) >= LAST_SEEN_META_THROTTLE_MS) {
+        record._lastMetaWriteMs = now;
+        try { writeMeta(record); } catch { /* ignore */ }
+      }
       this.emit(`agent:${record.id}`, wrapped);
       const at = record.lastSeen;
-      setImmediate(() => historyAppend(record.id, { eventId, at, event, data }));
+      // Sync append so history GET + X-Stream-Cursor include this event when
+      // the client races stream open against in-flight turns.
+      historyAppend(record.id, { eventId, at, event, data });
     };
   }
 

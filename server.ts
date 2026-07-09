@@ -560,10 +560,28 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: string,
       const turnsParam = parseInt(urlObj.searchParams.get('turns') || '50', 10);
       const turns = Number.isFinite(turnsParam) && turnsParam > 0 ? turnsParam : 50;
       const sliced = sliceHistoryByTurns(readHistory(id) || '', { all, turns });
+      // Cursor for SSE gap-fill: last history eventId the client will render.
+      // Stream opens with ?since=<cursor> so events that land during the
+      // history fetch are not dropped (and are not double-applied).
+      let streamCursor = '';
+      if (sliced.text) {
+        const lines = sliced.text.split('\n').filter(Boolean);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            const obj = JSON.parse(lines[i] || '') as { eventId?: unknown };
+            if (typeof obj.eventId === 'string' && obj.eventId) {
+              streamCursor = obj.eventId;
+              break;
+            }
+          } catch { /* skip */ }
+        }
+      }
       res.writeHead(200, {
         'Content-Type': 'application/x-ndjson; charset=utf-8',
         'X-Total-Turns': String(sliced.totalTurns),
         'X-Returned-Turns': String(sliced.returnedTurns),
+        'X-Stream-Cursor': streamCursor,
+        'Access-Control-Expose-Headers': 'X-Total-Turns, X-Returned-Turns, X-Stream-Cursor',
       });
       res.end(sliced.text);
       return;
@@ -1291,12 +1309,16 @@ function handleStream(req: IncomingMessage, res: ServerResponse, id: string): vo
   if (!ring) { sendJson(res, 404, { ok: false, error: 'agent not found' }); return; }
 
   sseHeaders(res);
-  // Only gap-fill from the ring when the browser reconnects with
-  // Last-Event-ID. A fresh open (after GET /history) must NOT dump the
-  // ring — that re-applied the same turns and garbled the chat UI.
-  const lastId = req.headers['last-event-id'] as string | undefined;
-  if (lastId) {
-    for (const ev of ring.since(lastId)) {
+  // Gap-fill cursor (in priority order):
+  //   1. ?since= from the client after history load (X-Stream-Cursor)
+  //   2. Last-Event-ID on EventSource reconnect
+  // Never dump the whole ring on a bare open — that doubles history.
+  const urlObj = new URL(req.url || '/', 'http://x');
+  const sinceQ = urlObj.searchParams.get('since') || '';
+  const lastHeader = (req.headers['last-event-id'] as string | undefined) || '';
+  const cursor = sinceQ || lastHeader;
+  if (cursor) {
+    for (const ev of ring.since(cursor)) {
       sseWrite(res, ev);
     }
   }
@@ -1350,21 +1372,18 @@ server.listen(PORT, HOST, () => {
   console.log(`[grok-remote] tailnet url: ${where}`);
 });
 
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, () => {
-    try { retention.stop(); } catch { /* ignore */ }
-  });
-}
-
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[grok-remote] shutdown on ${signal}`);
+  try { retention.stop(); } catch { /* ignore */ }
   try { await manager.shutdownAll(); } catch { /* ignore */ }
   server.close(() => process.exit(0));
-  const t = setTimeout(() => process.exit(0), 3000);
+  // Allow disconnect/await-exit to finish; Wave A detach waits up to ~3.5s each.
+  const t = setTimeout(() => process.exit(0), 8000);
   t.unref?.();
 }
+// Single shutdown path (was dual SIGINT/SIGTERM listeners).
 process.on('SIGINT', () => { void shutdown('SIGINT'); });
 process.on('SIGTERM', () => { void shutdown('SIGTERM'); });

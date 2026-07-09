@@ -84,6 +84,12 @@ export class ChatView {
   _pendingTodoSeed!: any;
   _promptCapImage!: any;
   _scrollRaf!: any;
+  /** ACP _meta.eventId values already applied (history + live). */
+  _seenAcpEventIds!: Set<string>;
+  /** SSE event ids already applied (history eventId + live lastEventId). */
+  _seenSseEventIds!: Set<string>;
+  /** Last stream cursor for gap-fill / reconnect. */
+  _streamCursor!: string;
   _sdDirty!: any;
   _sdDirtyNotice!: any;
   _sdFields!: any;
@@ -152,6 +158,9 @@ export class ChatView {
     this.activeTurn = null;
     this.availableCommands = [];
     this.tabsState = 'conversation';
+    this._seenAcpEventIds = new Set();
+    this._seenSseEventIds = new Set();
+    this._streamCursor = '';
 
     // Lazy cache of known skill names (set of strings). Populated on first
     // user message that starts with `/`. Drives the "invoked skill" banner
@@ -1019,15 +1028,8 @@ export class ChatView {
 
     const agentIdAtCall = agent.id;
     this.refreshHistory()
-      .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
-      .finally(() => {
-        // Never open a stream for a stale setAgent call (fast A→B switch).
+      .then((cursor) => {
         if (this.agentId !== agentIdAtCall) return;
-        // Only show the intro if the agent we loaded history for is still
-        // the active one (the user may have switched mid-load), there are
-        // no turns yet (brand new conversation), and no other intro is in
-        // flight. We also gate on activeTurn being null so we don't paint
-        // the intro on top of an SSE event that raced in.
         if (
           (!this.turns || this.turns.length === 0) &&
           !this.activeTurn &&
@@ -1036,7 +1038,13 @@ export class ChatView {
           this._playChatIntro();
         }
         this.closeStream();
-        this.openStreamForCurrent();
+        this.openStreamForCurrent(cursor || this._streamCursor || '');
+      })
+      .catch((e) => {
+        this.showStatus(`history load failed: ${e.message}`, 'warn');
+        if (this.agentId !== agentIdAtCall) return;
+        this.closeStream();
+        this.openStreamForCurrent('');
       });
 
     this.renderInfo(agent);
@@ -1246,12 +1254,17 @@ export class ChatView {
     }
   }
 
-  async refreshHistory({ all = false, turns = 50 } = {}) {
-    if (!this.agentId) return;
+  async refreshHistory({ all = false, turns = 50 } = {}): Promise<string> {
+    if (!this.agentId) return '';
     this._historyAll = !!all;
+    // Seed live dedup sets from this load so stream gap-fill won't re-apply.
+    this._seenAcpEventIds = new Set();
+    this._seenSseEventIds = new Set();
+    let streamCursor = '';
     try {
       const hist: any = await api.history(this.agentId, { turns, all });
       const events: any[] = (hist && Array.isArray(hist.events)) ? hist.events : [];
+      streamCursor = (hist && typeof hist.streamCursor === 'string') ? hist.streamCursor : '';
       this.streamEl.replaceChildren();
       if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
       this.turns = [];
@@ -1263,20 +1276,22 @@ export class ChatView {
         this.streamEl.appendChild(this._buildLoadEarlierBanner(total - returned));
       }
       this._isReplaying = true;
-      // Skip ACP session/load events we've already applied. Reconnect used
-      // to re-append the whole transcript (same _meta.eventId twice).
-      const seenAcpIds = new Set<string>();
+      let lastEventId = '';
       try {
         for (const ev of events) {
           const name = ev.event || ev.type || ev.name;
           const data = ev.data || ev.payload || ev;
           if (!name) continue;
+          if (typeof ev.eventId === 'string' && ev.eventId) {
+            this._seenSseEventIds.add(ev.eventId);
+            lastEventId = ev.eventId;
+          }
           const acpId = data && data._meta && typeof data._meta.eventId === 'string'
             ? data._meta.eventId
             : null;
           if (acpId) {
-            if (seenAcpIds.has(acpId)) continue;
-            seenAcpIds.add(acpId);
+            if (this._seenAcpEventIds.has(acpId)) continue;
+            this._seenAcpEventIds.add(acpId);
           }
           // Stash event timestamp so bubble renders pick up the real time
           // rather than "now" during a history replay.
@@ -1291,6 +1306,7 @@ export class ChatView {
       } finally {
         this._isReplaying = false;
       }
+      if (!streamCursor && lastEventId) streamCursor = lastEventId;
       this._lastEventTs = null;
       // History replay may end with an unterminated turn (interrupted session,
       // or a prompt_complete that never made it to disk). Finalize thinking
@@ -1321,6 +1337,8 @@ export class ChatView {
     } catch (e) {
       // backend may not implement history yet
     }
+    this._streamCursor = streamCursor;
+    return streamCursor;
   }
 
   _buildLoadEarlierBanner(missingCount: any) {
@@ -1336,13 +1354,35 @@ export class ChatView {
     return el('div', { class: 'history-load-more' }, btn);
   }
 
-  openStreamForCurrent() {
+  openStreamForCurrent(sinceCursor?: string) {
     if (!this.agentId) return;
     this.showStatus('connecting...', 'idle');
-    this.stream = openStream(`/api/agents/${encodeURIComponent(this.agentId)}/stream`, {
+    const cursor = sinceCursor != null ? sinceCursor : (this._streamCursor || '');
+    const qs = cursor ? `?since=${encodeURIComponent(cursor)}` : '';
+    this.stream = openStream(`/api/agents/${encodeURIComponent(this.agentId)}/stream${qs}`, {
       onOpen:  () => this.showStatus('connected', 'ok'),
       onError: () => this.showStatus('stream error · reconnecting', 'warn'),
-      onAny:   (name, data) => this.handleEvent(name, data),
+      onAny:   (name, data, ev) => {
+        // Live-path dedup: history already applied these ACP / SSE ids.
+        const payload = data && typeof data === 'object' ? data as Record<string, unknown> : null;
+        const meta = payload && payload._meta && typeof payload._meta === 'object'
+          ? payload._meta as Record<string, unknown>
+          : null;
+        const acpId = meta && typeof meta.eventId === 'string' ? meta.eventId : null;
+        if (acpId && this._seenAcpEventIds && this._seenAcpEventIds.has(acpId)) return;
+        if (acpId) {
+          if (!this._seenAcpEventIds) this._seenAcpEventIds = new Set();
+          this._seenAcpEventIds.add(acpId);
+        }
+        const sseId = ev && (ev as MessageEvent).lastEventId;
+        if (sseId && this._seenSseEventIds && this._seenSseEventIds.has(sseId)) return;
+        if (sseId) {
+          if (!this._seenSseEventIds) this._seenSseEventIds = new Set();
+          this._seenSseEventIds.add(sseId);
+          this._streamCursor = sseId;
+        }
+        this.handleEvent(name, data);
+      },
     });
   }
 

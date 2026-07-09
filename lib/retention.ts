@@ -1,7 +1,7 @@
 // Periodic cleanup of stale agent directories under ~/.grok-remote/agents/.
 //
 // Triggered by settings.retentionDays (0 disables). Honors starred + archived
-// flags (never auto-prune a starred agent). Skips agents currently connected.
+// flags (never auto-prune those). Skips agents currently connected.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,7 @@ const AGENTS_ROOT = path.join(os.homedir(), '.grok-remote', 'agents');
 
 export interface AgentMeta {
   starred?: boolean;
+  archived?: boolean;
   lastSeen?: string;
   updatedAt?: string;
   createdAt?: string;
@@ -32,6 +33,8 @@ export interface SweepInputs {
   days?: number;
   manager?: AgentManagerLike | null;
   now?: number;
+  /** Override agents root (tests). */
+  agentsRoot?: string;
 }
 
 export interface SweepResult {
@@ -51,27 +54,42 @@ export interface RetentionTimer {
   tick(): void;
 }
 
-function readMeta(id: string): AgentMeta | null {
+function readMeta(root: string, id: string): AgentMeta | null {
   try {
-    const raw = fs.readFileSync(path.join(AGENTS_ROOT, id, 'meta.json'), 'utf8');
+    const raw = fs.readFileSync(path.join(root, id, 'meta.json'), 'utf8');
     return JSON.parse(raw) as AgentMeta;
   } catch { return null; }
 }
 
-function dirMtimeMs(id: string): number {
-  try { return fs.statSync(path.join(AGENTS_ROOT, id)).mtimeMs; }
+function dirMtimeMs(root: string, id: string): number {
+  try { return fs.statSync(path.join(root, id)).mtimeMs; }
   catch { return 0; }
 }
 
+/** Prefer history.jsonl mtime (real activity) over stale meta.lastSeen. */
+function activityMs(root: string, id: string, meta: AgentMeta): number {
+  let histMs = 0;
+  try { histMs = fs.statSync(path.join(root, id, 'history.jsonl')).mtimeMs; }
+  catch { /* no history yet */ }
+  const t = Date.parse(meta.lastSeen || meta.updatedAt || meta.createdAt || '');
+  const metaMs = Number.isFinite(t) ? t : 0;
+  const dirMs = dirMtimeMs(root, id);
+  return Math.max(histMs, metaMs, dirMs);
+}
+
+/**
+ * Synchronous sweep. When `manager` is provided, kill is fire-and-forget
+ * for backward compatibility — prefer `sweepOnceAsync` in the timer path.
+ */
 export function sweepOnce(
-  { days, manager, now = Date.now() }: SweepInputs = {},
+  { days, manager, now = Date.now(), agentsRoot = AGENTS_ROOT }: SweepInputs = {},
 ): SweepResult {
   const n = Number(days);
   if (!Number.isFinite(n) || n <= 0) return { scanned: 0, removed: 0, skipped: 0 };
   const cutoffMs = now - n * 24 * 60 * 60 * 1000;
 
   let entries: string[];
-  try { entries = fs.readdirSync(AGENTS_ROOT); }
+  try { entries = fs.readdirSync(agentsRoot); }
   catch { return { scanned: 0, removed: 0, skipped: 0 }; }
 
   let scanned = 0, removed = 0, skipped = 0;
@@ -80,27 +98,89 @@ export function sweepOnce(
     : new Map<string, AgentLiveRecord>();
 
   for (const id of entries) {
-    const metaPath = path.join(AGENTS_ROOT, id, 'meta.json');
+    const metaPath = path.join(agentsRoot, id, 'meta.json');
     if (!fs.existsSync(metaPath)) continue;
     scanned++;
-    const meta = readMeta(id) || {};
-    if (meta.starred) { skipped++; continue; }
+    const meta = readMeta(agentsRoot, id) || {};
+    if (meta.starred || meta.archived) { skipped++; continue; }
     const live = active.get(id);
-    if (live && live.status && live.status !== 'disconnected') { skipped++; continue; }
-    const t = Date.parse(meta.lastSeen || meta.updatedAt || meta.createdAt || '');
-    const lastMs = Number.isFinite(t) ? t : dirMtimeMs(id);
+    if (live && live.status && live.status !== 'disconnected' && live.status !== 'errored') {
+      skipped++;
+      continue;
+    }
+    const lastMs = activityMs(agentsRoot, id, meta);
     if (lastMs >= cutoffMs) { skipped++; continue; }
 
     try {
       if (manager) {
+        // Sync API cannot await; timer path should use sweepOnceAsync.
         Promise.resolve(manager.kill(id)).catch(() => { /* ignore */ });
+        removed++;
       } else {
-        const dir = path.join(AGENTS_ROOT, id);
-        if (dir.startsWith(AGENTS_ROOT + path.sep)) {
+        const dir = path.join(agentsRoot, id);
+        if (dir.startsWith(agentsRoot + path.sep) || dir === agentsRoot) {
           fs.rmSync(dir, { recursive: true, force: true });
+          removed++;
+        } else {
+          skipped++;
         }
       }
-      removed++;
+    } catch {
+      skipped++;
+    }
+  }
+  return { scanned, removed, skipped };
+}
+
+/** Await each kill and only count successful removals. */
+export async function sweepOnceAsync(
+  { days, manager, now = Date.now(), agentsRoot = AGENTS_ROOT }: SweepInputs = {},
+): Promise<SweepResult> {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n <= 0) return { scanned: 0, removed: 0, skipped: 0 };
+  const cutoffMs = now - n * 24 * 60 * 60 * 1000;
+
+  let entries: string[];
+  try { entries = fs.readdirSync(agentsRoot); }
+  catch { return { scanned: 0, removed: 0, skipped: 0 }; }
+
+  let scanned = 0, removed = 0, skipped = 0;
+  const active = manager
+    ? new Map<string, AgentLiveRecord>(manager.list().map((r) => [r.id, r]))
+    : new Map<string, AgentLiveRecord>();
+
+  for (const id of entries) {
+    const metaPath = path.join(agentsRoot, id, 'meta.json');
+    if (!fs.existsSync(metaPath)) continue;
+    scanned++;
+    const meta = readMeta(agentsRoot, id) || {};
+    if (meta.starred || meta.archived) { skipped++; continue; }
+    const live = active.get(id);
+    if (live && live.status && live.status !== 'disconnected' && live.status !== 'errored') {
+      skipped++;
+      continue;
+    }
+    const lastMs = activityMs(agentsRoot, id, meta);
+    if (lastMs >= cutoffMs) { skipped++; continue; }
+
+    try {
+      if (manager) {
+        await Promise.resolve(manager.kill(id));
+        // kill should have removed the dir; if not, force-remove.
+        const dir = path.join(agentsRoot, id);
+        if (fs.existsSync(dir) && (dir.startsWith(agentsRoot + path.sep) || dir === agentsRoot)) {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+        removed++;
+      } else {
+        const dir = path.join(agentsRoot, id);
+        if (dir.startsWith(agentsRoot + path.sep) || dir === agentsRoot) {
+          fs.rmSync(dir, { recursive: true, force: true });
+          removed++;
+        } else {
+          skipped++;
+        }
+      }
     } catch {
       skipped++;
     }
@@ -112,20 +192,27 @@ export function sweepOnce(
 export function startRetentionTimer(
   { getSettings, manager, intervalMs = 24 * 60 * 60 * 1000 }: RetentionTimerInputs = {},
 ): RetentionTimer {
+  let running = false;
   const tick = (): void => {
-    try {
-      const s = typeof getSettings === 'function' ? getSettings() : null;
-      const days = Number(s && s.retentionDays);
-      if (Number.isFinite(days) && days > 0) {
-        const r = sweepOnce({ days, manager });
-        if (r.removed > 0) {
-          process.stderr.write(`[retention] swept: removed=${r.removed} scanned=${r.scanned} skipped=${r.skipped}\n`);
+    if (running) return;
+    running = true;
+    void (async () => {
+      try {
+        const s = typeof getSettings === 'function' ? getSettings() : null;
+        const days = Number(s && s.retentionDays);
+        if (Number.isFinite(days) && days > 0) {
+          const r = await sweepOnceAsync({ days, manager });
+          if (r.removed > 0) {
+            process.stderr.write(`[retention] swept: removed=${r.removed} scanned=${r.scanned} skipped=${r.skipped}\n`);
+          }
         }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[retention] sweep failed: ${msg}\n`);
+      } finally {
+        running = false;
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[retention] sweep failed: ${msg}\n`);
-    }
+    })();
   };
   const initial = setTimeout(tick, 30_000);
   const handle = setInterval(tick, intervalMs);

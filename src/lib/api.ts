@@ -48,6 +48,8 @@ export interface HistoryResult {
   events: unknown[];
   totalTurns: number;
   returnedTurns: number;
+  /** Ring/SSE cursor for `GET .../stream?since=` gap-fill after history. */
+  streamCursor: string;
 }
 
 export const api = {
@@ -102,6 +104,7 @@ export const api = {
       events,
       totalTurns:    parseInt(r.headers.get('X-Total-Turns')    || '0', 10) || 0,
       returnedTurns: parseInt(r.headers.get('X-Returned-Turns') || '0', 10) || 0,
+      streamCursor:  r.headers.get('X-Stream-Cursor') || '',
     };
   },
   listFiles:    (id: string, path?: string): Promise<unknown> => request('GET', `/api/agents/${encodeURIComponent(id)}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`),

@@ -35,7 +35,7 @@ export type StreamHandler = (parsed: unknown, ev: MessageEvent) => void;
 export interface StreamOptions {
   onOpen?: () => void;
   onError?: (err: unknown) => void;
-  onAny?: (name: StreamEventName, parsed: unknown, ev: MessageEvent) => void;
+  onAny?: (name: StreamEventName, parsed: unknown, ev?: MessageEvent) => void;
   on?: Partial<Record<StreamEventName, StreamHandler>>;
 }
 
