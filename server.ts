@@ -41,6 +41,7 @@ import {
   authToken,
   jailRoot,
 } from './lib/security.js';
+import { bootStartStatus, setBootStart } from './lib/boot-autostart.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -240,18 +241,59 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: string,
   }
 
   if (url === '/api/settings' && method === 'GET') {
-    sendJson(res, 200, loadSettings());
+    const s = loadSettings();
+    const boot = bootStartStatus();
+    sendJson(res, 200, {
+      ...s,
+      // OS truth for the login toggle (may differ until user saves).
+      bootStart: boot,
+      startOnLogin: boot.enabled,
+    });
     return;
   }
 
   if (url === '/api/settings' && method === 'PATCH') {
     try {
-      const body = await readJsonBody(req);
-      const merged = saveSettings((body || {}) as Record<string, unknown>);
-      sendJson(res, 200, merged);
+      const body = (await readJsonBody(req) || {}) as Record<string, unknown>;
+      // Handle startOnLogin before generic merge — mutates OS LaunchAgent.
+      if (typeof body['startOnLogin'] === 'boolean') {
+        const boot = setBootStart(!!body['startOnLogin']);
+        body['startOnLogin'] = boot.enabled;
+      }
+      if (typeof body['autoReconnectAgents'] === 'boolean') {
+        body['autoReconnectAgents'] = !!body['autoReconnectAgents'];
+      }
+      const merged = saveSettings(body);
+      const boot = bootStartStatus();
+      sendJson(res, 200, {
+        ...merged,
+        bootStart: boot,
+        startOnLogin: boot.enabled,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       sendJson(res, 400, { ok: false, error: msg });
+    }
+    return;
+  }
+
+  if (url === '/api/system/boot-start' && method === 'GET') {
+    sendJson(res, 200, { ok: true, ...bootStartStatus() });
+    return;
+  }
+  if (url === '/api/system/boot-start' && method === 'POST') {
+    try {
+      const body = (await readJsonBody(req) || {}) as { enabled?: boolean };
+      if (typeof body.enabled !== 'boolean') {
+        sendJson(res, 400, { ok: false, error: 'enabled boolean required' });
+        return;
+      }
+      const boot = setBootStart(body.enabled);
+      saveSettings({ startOnLogin: boot.enabled });
+      sendJson(res, 200, { ok: true, ...boot });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sendJson(res, 500, { ok: false, error: msg });
     }
     return;
   }
@@ -1236,9 +1278,8 @@ function handleTerminalKill(_req2: IncomingMessage, res: ServerResponse, rec: Pu
   if (bg.completed) { sendJson(res, 200, { ok: true, alreadyExited: true }); return; }
   // Never pkill -f <cwd> (substring match can kill unrelated processes).
   // Best-effort: if we have a recorded PID, kill that process group only.
-  const pid = typeof (bg as { pid?: unknown }).pid === 'number'
-    ? (bg as { pid: number }).pid
-    : null;
+  const bgAny = bg as unknown as { pid?: unknown };
+  const pid = typeof bgAny.pid === 'number' ? bgAny.pid : null;
   if (pid && pid > 1) {
     try {
       process.kill(-pid, 'SIGTERM');
@@ -1411,6 +1452,31 @@ server.listen(PORT, HOST, () => {
     console.log('[grok-remote] WARNING: no GROK_REMOTE_TOKEN — non-loopback API is open (fleet loopback still preferred)');
   }
   console.log('[grok-remote] client contract: docs/CLIENT_CONTRACT.md (agent-fleet frozen)');
+  const boot = bootStartStatus();
+  console.log(`[grok-remote] start-on-login: ${boot.enabled ? 'enabled' : 'disabled'} (${boot.method}) — ${boot.detail}`);
+
+  // Warm agents after listen so /api/health is already up for fleet probes.
+  setTimeout(() => {
+    try {
+      const s = loadSettings();
+      if (s.autoReconnectAgents === false) {
+        console.log('[grok-remote] auto-reconnect agents: disabled in settings');
+        return;
+      }
+      console.log('[grok-remote] auto-reconnect agents: starting…');
+      void manager.autoReconnectAgents({ enabled: true }).then((r) => {
+        console.log(
+          `[grok-remote] auto-reconnect agents: attempted=${r.attempted} ok=${r.ok} failed=${r.failed} skipped=${r.skipped}`,
+        );
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`[grok-remote] auto-reconnect agents failed: ${msg}`);
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(`[grok-remote] auto-reconnect agents failed: ${msg}`);
+    }
+  }, 1500);
 });
 
 let shuttingDown = false;

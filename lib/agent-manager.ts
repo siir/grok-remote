@@ -319,6 +319,71 @@ export class AgentManager extends EventEmitter {
     this._hydrateFromDisk();
   }
 
+  /**
+   * Reconnect agents that have a durable lastSessionId (session/load).
+   * Starred first, then most-recently-seen. Skips archived and agents
+   * without a session to resume. Staggers starts to avoid thundering herd.
+   */
+  async autoReconnectAgents(opts: {
+    enabled?: boolean;
+    staggerMs?: number;
+    sessionTimeoutMs?: number;
+    limit?: number;
+  } = {}): Promise<{ attempted: number; ok: number; failed: number; skipped: number }> {
+    const enabled = opts.enabled !== false;
+    if (!enabled) return { attempted: 0, ok: 0, failed: 0, skipped: 0 };
+
+    const staggerMs = typeof opts.staggerMs === 'number' ? opts.staggerMs : 750;
+    const sessionTimeoutMs = typeof opts.sessionTimeoutMs === 'number' ? opts.sessionTimeoutMs : 20_000;
+    const limit = typeof opts.limit === 'number' && opts.limit > 0 ? opts.limit : 20;
+
+    const candidates = [...this.agents.values()]
+      .filter((a) => !a.archived && !!a.lastSessionId && !a.client)
+      .sort((a, b) => {
+        // Starred first, then newest lastSeen.
+        if (!!a.starred !== !!b.starred) return a.starred ? -1 : 1;
+        return String(b.lastSeen || '').localeCompare(String(a.lastSeen || ''));
+      })
+      .slice(0, limit);
+
+    let attempted = 0;
+    let ok = 0;
+    let failed = 0;
+    const skipped = this.agents.size - candidates.length;
+
+    for (const rec of candidates) {
+      attempted++;
+      try {
+        process.stderr.write(
+          `[auto-reconnect] connecting ${rec.id.slice(0, 8)} (${rec.name}) session=${rec.lastSessionId}\n`,
+        );
+        this._connectRecord(rec);
+        await this._waitForSession(rec, sessionTimeoutMs);
+        ok++;
+        this.emit('list_changed', {
+          event: 'agent_status',
+          id: rec.id,
+          status: rec.client?.status || 'idle',
+          agent: this._publicRecord(rec),
+        });
+      } catch (err) {
+        failed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        rec.lastError = msg;
+        try { writeMeta(rec); } catch { /* ignore */ }
+        process.stderr.write(`[auto-reconnect] failed ${rec.id.slice(0, 8)}: ${msg}\n`);
+      }
+      if (staggerMs > 0) {
+        await new Promise<void>((r) => setTimeout(r, staggerMs));
+      }
+    }
+
+    process.stderr.write(
+      `[auto-reconnect] done attempted=${attempted} ok=${ok} failed=${failed} skipped=${skipped}\n`,
+    );
+    return { attempted, ok, failed, skipped };
+  }
+
   private _hydrateFromDisk(): void {
     for (const id of listPersistedAgentIds()) {
       const meta = readMetaFromDisk(id);

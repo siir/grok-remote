@@ -19,6 +19,15 @@ interface SettingsSnapshot {
   debug?: boolean;
   retentionDays?: number;
   theme?: string;
+  autoReconnectAgents?: boolean;
+  startOnLogin?: boolean;
+  bootStart?: {
+    supported?: boolean;
+    enabled?: boolean;
+    method?: string;
+    detail?: string;
+    path?: string | null;
+  };
 }
 
 interface PageModule {
@@ -44,6 +53,9 @@ export class SettingsView {
   cwdInput!: HTMLInputElement;
   autoApprove!: HTMLInputElement;
   debugToggle!: HTMLInputElement;
+  autoReconnectToggle!: HTMLInputElement;
+  startOnLoginToggle!: HTMLInputElement;
+  bootStartHelp!: HTMLElement;
   retentionInput!: HTMLInputElement;
   themePicker!: HTMLElement;
   statusEl!: HTMLElement;
@@ -156,6 +168,9 @@ export class SettingsView {
     this.cwdInput     = el('input', { class: 'inp', type: 'text', placeholder: '/path/to/working/dir' }) as HTMLInputElement;
     this.autoApprove  = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.debugToggle  = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.autoReconnectToggle = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.startOnLoginToggle = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.bootStartHelp = el('div', { class: 'field-help' }, '') as HTMLElement;
     this.retentionInput = el('input', {
       class: 'inp inp--num', type: 'number', min: '0', max: '3650', step: '1', placeholder: '30',
     }) as HTMLInputElement;
@@ -187,6 +202,15 @@ export class SettingsView {
         el('label', { class: 'toggle' }, this.autoApprove,
           el('span', { class: 'toggle-text' }, 'on')),
         'server already passes --always-approve. shown here for visibility.'),
+      this.field('auto-reconnect agents on host start',
+        el('label', { class: 'toggle' }, this.autoReconnectToggle,
+          el('span', { class: 'toggle-text' }, 'on')),
+        'when the control plane starts, reconnect agents that have a session id (session/load). keeps fleet/phone conversations warm after restart. starred agents reconnect first.'),
+      this.field('start grok-remote at login',
+        el('label', { class: 'toggle' }, this.startOnLoginToggle,
+          el('span', { class: 'toggle-text' }, 'on')),
+        'installs a user LaunchAgent (macOS) or systemd user unit (Linux) so the control plane comes up after reboot — no pm2 required.'),
+      this.bootStartHelp,
       this.field('debug controls',
         el('label', { class: 'toggle' }, this.debugToggle,
           el('span', { class: 'toggle-text' }, 'show developer affordances')),
@@ -230,6 +254,17 @@ export class SettingsView {
         this.cwdInput.value    = this.settings.defaultCwd   || '';
         this.autoApprove.checked = !!this.settings.autoApprove;
         this.debugToggle.checked = !!this.settings.debug;
+        this.autoReconnectToggle.checked = this.settings.autoReconnectAgents !== false;
+        this.startOnLoginToggle.checked = !!(this.settings.startOnLogin || this.settings.bootStart?.enabled);
+        this.startOnLoginToggle.disabled = this.settings.bootStart?.supported === false;
+        const boot = this.settings.bootStart;
+        if (boot) {
+          this.bootStartHelp.textContent = boot.supported === false
+            ? (boot.detail || 'start-at-login not supported on this platform')
+            : `${boot.enabled ? 'enabled' : 'disabled'} via ${boot.method || 'none'}${boot.detail ? ` — ${boot.detail}` : ''}`;
+        } else {
+          this.bootStartHelp.textContent = '';
+        }
         const rd = (this.settings.retentionDays != null) ? Number(this.settings.retentionDays) : 30;
         this.retentionInput.value = Number.isFinite(rd) ? String(Math.max(0, Math.min(3650, rd))) : '30';
       } else {
@@ -289,6 +324,8 @@ export class SettingsView {
       defaultCwd:   this.cwdInput.value.trim() || null,
       autoApprove:  !!this.autoApprove.checked,
       debug:        !!this.debugToggle.checked,
+      autoReconnectAgents: !!this.autoReconnectToggle.checked,
+      startOnLogin: !!this.startOnLoginToggle.checked,
       retentionDays: clampInt(this.retentionInput.value, 0, 3650, 30),
       theme:        getTheme(),
     };
@@ -297,6 +334,13 @@ export class SettingsView {
     try {
       const updated = await api.patchSettings(body);
       this.settings = (updated || body) as SettingsSnapshot;
+      this.startOnLoginToggle.checked = !!(this.settings.startOnLogin || this.settings.bootStart?.enabled);
+      const boot = this.settings.bootStart;
+      if (boot) {
+        this.bootStartHelp.textContent = boot.supported === false
+          ? (boot.detail || 'start-at-login not supported on this platform')
+          : `${boot.enabled ? 'enabled' : 'disabled'} via ${boot.method || 'none'}${boot.detail ? ` — ${boot.detail}` : ''}`;
+      }
       this.setStatus('saved', 'ok');
       window.dispatchEvent(new CustomEvent('grok-remote:settings-change', {
         detail: this.settings,

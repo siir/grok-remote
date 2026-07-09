@@ -14,6 +14,17 @@ export interface Settings {
   retentionDays: number;
   theme:        string;
   debug:        boolean;
+  /**
+   * After the control plane starts, reconnect agents that have a
+   * lastSessionId (session/load). Default on — keeps fleet/phone sessions
+   * warm across host restarts without requiring a new user message.
+   */
+  autoReconnectAgents: boolean;
+  /**
+   * Preferred "start at login" flag. OS install state is reported separately
+   * via boot-autostart status; PATCH may enable/disable the LaunchAgent.
+   */
+  startOnLogin: boolean;
   [key: string]: unknown;
 }
 
@@ -24,6 +35,8 @@ const DEFAULTS: Settings = {
   retentionDays: 30,
   theme: 'dark',
   debug: false,
+  autoReconnectAgents: true,
+  startOnLogin: false,
 };
 
 function ensureRoot(): void {
