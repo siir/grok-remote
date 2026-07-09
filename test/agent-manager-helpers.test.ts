@@ -9,6 +9,7 @@ import {
   uniqueUploadName,
   humanSize,
   attachmentLine,
+  normalizeLastSessionId,
 } from '../lib/agent-manager.js';
 
 test('sanitizeFilename keeps safe characters as-is', () => {
@@ -112,4 +113,19 @@ test('attachmentLine falls back to application/octet-stream when mime is missing
     }),
     '- /tmp/work/uploads/blob (application/octet-stream, 42 bytes)',
   );
+});
+
+
+test('normalizeLastSessionId accepts lowercase UUIDs', () => {
+  assert.equal(
+    normalizeLastSessionId('019ee81d-e902-7260-b232-77f940aee4ca'),
+    '019ee81d-e902-7260-b232-77f940aee4ca',
+  );
+});
+
+test('normalizeLastSessionId trims and rejects invalid ids', () => {
+  assert.equal(normalizeLastSessionId('  019ee81d-e902-7260-b232-77f940aee4ca  '), '019ee81d-e902-7260-b232-77f940aee4ca');
+  assert.equal(normalizeLastSessionId('not-a-uuid'), null);
+  assert.equal(normalizeLastSessionId(''), null);
+  assert.equal(normalizeLastSessionId(null), null);
 });

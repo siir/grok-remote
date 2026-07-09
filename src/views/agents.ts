@@ -10,6 +10,7 @@ import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
 import { fmtTokens } from '../lib/format.js';
 import { computeSelection } from './agents-selection.js';
+import { openNewSessionDialog } from './new-session-dialog.js';
 
 const STATUS_LABEL: Record<string, string> = {
   idle:         'idle',
@@ -178,7 +179,7 @@ export class AgentsSidebar {
 
     this.newBtn = el('button', {
       class: 'agents-new-btn',
-      title: 'spawn a new agent (auto-named from the first message)',
+      title: 'configure and spawn a new agent',
       onclick: () => void this.spawnNew(),
     }, '+ new') as HTMLButtonElement;
 
@@ -348,16 +349,37 @@ export class AgentsSidebar {
 
   async spawnNew(): Promise<void> {
     if (this._creating) return;
+    this.error.hidden = true;
+
+    // Configure cwd + session settings before creating.
+    let config: Awaited<ReturnType<typeof openNewSessionDialog>>;
+    try {
+      config = await openNewSessionDialog();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'failed to open new session dialog';
+      this.error.textContent = msg;
+      this.error.hidden = false;
+      return;
+    }
+    if (!config) return; // cancelled
+
     this._creating = true;
     this.newBtn.disabled = true;
-    this.error.hidden = true;
     const prevLabel = this.newBtn.textContent;
     this.newBtn.textContent = 'spawning...';
     try {
-      const created = await api.createAgent({}) as Agent;
+      const body: Record<string, unknown> = {
+        settings: config.settings || {},
+      };
+      if (config.name) body.name = config.name;
+      if (config.model) body.model = config.model;
+      if (config.cwd) body.cwd = config.cwd;
+      const created = await api.createAgent(body) as Agent;
       if (typeof this.onCreate === 'function') this.onCreate(created);
       await this.refresh();
       if (created && created.id) this.select(created.id);
+      // Close mobile drawer so the new chat is front and center.
+      document.dispatchEvent(new CustomEvent('grok-remote:close-drawer'));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'failed to spawn agent';
       this.error.textContent = msg;

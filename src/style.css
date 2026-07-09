@@ -31,9 +31,12 @@ html, body {
   /* Lock to viewport. Only the chat-stream scrolls; the composer and the
      sidebar stay put regardless of conversation length.
      100dvh respects iOS Safari's collapsing URL bar so we never end up
-     with a chunk of layout hidden behind the bottom toolbar. */
+     with a chunk of layout hidden behind the bottom toolbar.
+     --app-height is set from visualViewport on mobile so the on-screen
+     keyboard resizes the shell instead of covering the composer. */
   height: 100vh;
   height: 100dvh;
+  height: var(--app-height, 100dvh);
   overflow: hidden;
   /* Native-feel touch: no grey tap-flash, no 300ms double-tap delay. */
   -webkit-tap-highlight-color: transparent;
@@ -1395,7 +1398,8 @@ body::before {
     flex: 0 0 auto !important;
     border-left: none;
     border-top: 1px solid var(--border);
-    max-height: 40vh;
+    /* Keep tools peek-height modest once the bottom nav is also on screen. */
+    max-height: 32vh;
   }
 }
 
@@ -3022,12 +3026,20 @@ body::before {
     font-size: 16px;
   }
 
-  /* hamburger visible on narrow */
-  .hamburger { display: flex; }
+  /* hamburger visible on narrow — 44×44 hit target */
+  .hamburger {
+    display: flex;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    margin-right: 6px;
+    padding: 11px 10px;
+  }
 
   /* sidebar becomes an off-canvas drawer. Dashboard stays a flex column
      so the chat pane keeps filling the viewport and the composer stays
-     pinned at the bottom on mobile too. */
+     pinned above the bottom nav. */
   .dashboard {
     display: flex;
     flex-direction: column;
@@ -3039,7 +3051,7 @@ body::before {
     top: 0;
     left: 0;
     bottom: 0;
-    width: min(82vw, 320px);
+    width: min(88vw, 340px);
     /* well above .drawer-backdrop (z-index 30) and the install banner */
     z-index: 40;
     transform: translateX(-100%);
@@ -3048,7 +3060,8 @@ body::before {
     border-bottom: none;
     max-height: none;
     padding-top: calc(14px + env(safe-area-inset-top));
-    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+    /* leave room for the bottom nav when the drawer is open */
+    padding-bottom: calc(14px + env(safe-area-inset-bottom) + 56px);
     overflow-y: auto;
     /* fully opaque so the dimmed backdrop never bleeds through */
     background: var(--bg-soft);
@@ -3058,6 +3071,22 @@ body::before {
   body:not([data-drawer-open]) .drawer-backdrop { display: none; }
 
   .main-pane { width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* Compact top chrome: status pill only, theme as a color dot. */
+  .status-text { display: none; }
+  .theme-toggle-label { display: none; }
+  .theme-toggle {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+  .topbar-icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .topbar-right { gap: 6px; }
+  .topbar { padding-top: calc(8px + env(safe-area-inset-top)); padding-bottom: 8px; }
 
   /* tap targets >= 44 px */
   .btn,
@@ -3069,17 +3098,59 @@ body::before {
     min-height: 44px;
   }
   .agent-kill { min-width: 44px; min-height: 44px; }
+  .tab-actions-group .tab-action {
+    min-height: 36px;
+    height: 36px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+  .tab-actions-group .tab-action--icon-only {
+    width: 36px;
+    min-width: 36px;
+  }
+  .tab-actions-group .tab-action--icon-only .tab-action-ico,
+  .tab-actions-group .tab-action--icon-only .tab-action-ico svg {
+    width: 16px;
+    height: 16px;
+  }
 
   /* Composer height: smaller on mobile to leave room for the chat above,
      but still strictly fixed (no resize handle, no grow on focus). */
   .composer-input { height: 72px; min-height: 72px; max-height: 72px; }
-  .composer-actions { flex-wrap: wrap; }
+  .composer-actions {
+    flex-wrap: nowrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .composer-actions .btn { min-height: 40px; padding: 8px 14px; }
 
-  /* Tabs row: allow the action buttons (disconnect / copy convo) to wrap
-     under the tabs when the row is too narrow. */
-  .tabs { flex-wrap: wrap; row-gap: 6px; padding-right: 10px; }
-  .tabs-spacer { flex: 1 1 auto; min-width: 8px; }
-  .tab-action { padding: 5px 8px; font-size: 11px; }
+  /* Tabs: single-row horizontal scroll — wrapping was eating chat height. */
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    row-gap: 0;
+    padding: 8px 10px 0;
+    gap: 4px;
+  }
+  .tabs::-webkit-scrollbar { display: none; height: 0; }
+  .tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .tabs-spacer { display: none; }
+  .tab-actions-group {
+    flex: 0 0 auto;
+    margin-left: 4px;
+    margin-right: 4px;
+  }
+  .tab-tokens,
+  .tab-inflight {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
 
   /* Slim brand on mobile: only the "GR" mark stays visible.
      Save horizontal space for the hamburger + status pill. */
@@ -3087,7 +3158,13 @@ body::before {
   .brand-version { display: none; }
 
   /* Show the close-drawer button on mobile. */
-  .sidebar-close { display: inline-block; }
+  .sidebar-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
 
   /* The hamburger nudges the search/sort row a bit on narrow screens */
   .sidebar-tools {
@@ -3095,18 +3172,18 @@ body::before {
     align-items: stretch;
     gap: 8px;
   }
-  .sidebar-sort { max-width: none; width: 100%; }
-  .sidebar-search-input { font-size: 16px; padding: 8px 28px 8px 10px; }
+  .sidebar-sort { max-width: none; width: 100%; min-height: 44px; font-size: 16px; }
+  .sidebar-search-input { font-size: 16px; padding: 10px 28px 10px 12px; min-height: 44px; }
 
-  /* Composer extras row: pills + attach button + send/cancel never overflow */
-  .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) 10px; }
+  /* Composer sits above the bottom nav; safe-area lives on the nav. */
+  .composer { padding: 8px 10px; }
 
   /* Bigger, more readable type on phones. The desktop palette uses 14 px
      body / 11-13 px chrome which feels cramped on a 6 inch screen. Bump
      base text and the dense info rows; keep tiny chrome (icons, status
      pills) the same since they're glyphs, not reading text. */
   html, body         { font-size: 16px; }
-  .chat-stream       { font-size: 15px; line-height: 1.55; }
+  .chat-stream       { font-size: 15px; line-height: 1.55; padding: 12px 14px; }
   .agent-name        { font-size: 15px; }
   .agent-item-meta   { font-size: 12.5px; }
   .agent-status      { font-size: 12.5px; }
@@ -3114,7 +3191,7 @@ body::before {
   .agent-cwd         { font-size: 11px; }
   .tab               { font-size: 13px; padding: 8px 12px; }
   .tab-action        { font-size: 12px; }
-  .chat-status       { font-size: 13px; min-height: 36px; }
+  .chat-status       { font-size: 13px; min-height: 36px; padding: 8px 12px; }
   .info-k, .info-v   { font-size: 13px; }
   .tool-pill__label  { font-size: 12px; }
   .tool-pill__status { font-size: 10px; }
@@ -3139,6 +3216,17 @@ body::before {
     gap: 4px 0;
   }
   .info-k { margin-top: 8px; }
+
+  /* Empty-state CTAs: full-width stacked buttons */
+  .chat-empty { padding: 24px 20px; }
+  .chat-empty-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 16px;
+    align-items: stretch;
+  }
+  .chat-empty-btn { width: 100%; min-height: 48px; }
 
   /* Install banner on mobile: stays at the TOP (sliding down from
      the safe-area inset), full-width with small side margins, clearly
@@ -3166,19 +3254,21 @@ body::before {
 
 @media (max-width: 480px) {
   .topbar {
-    padding-left: calc(14px + env(safe-area-inset-left));
-    padding-right: calc(14px + env(safe-area-inset-right));
-    gap: 6px;
+    padding-left: calc(10px + env(safe-area-inset-left));
+    padding-right: calc(10px + env(safe-area-inset-right));
+    gap: 4px;
   }
-  .topbar-right { gap: 8px; }
+  .topbar-right { gap: 4px; }
   /* (brand-name + brand-version already hidden at 720px) */
   .figlet { font-size: 13px; }
   .chat-intro { padding: 8px 10px; }
-  .chat-stream { padding: 12px 12px; }
+  .chat-stream { padding: 10px 12px; }
+  /* Keep composer padding consistent with the 720px block (no safe-area
+     double-count — the bottom nav owns the home-indicator inset). */
   .composer { padding: 8px 10px; }
   .settings { padding: 18px 14px 60px; }
-  .tabs { padding: 8px 8px 0; }
-  .tab { padding: 8px 10px; }
+  .tabs { padding: 6px 8px 0; }
+  .tab { padding: 8px 10px; font-size: 12px; }
 }
 
 /* honor reduced-motion */
@@ -4387,11 +4477,17 @@ body::before {
   color: var(--muted);
 }
 @media (max-width: 720px) {
-  .dashboard--with-rail { flex-direction: column; }
+  /* Phone shell: content on top, bottom tab bar for primary nav.
+     Mirrors iOS/Android patterns so chats stay thumb-reachable. */
+  .dashboard--with-rail {
+    flex-direction: column;
+  }
   .split-host {
     flex: 1 1 auto;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    order: 1;
   }
   .sidebar-pane {
     display: contents;
@@ -4399,16 +4495,48 @@ body::before {
   .main-pane-wrap {
     flex: 1 1 auto;
     min-width: 0;
+    min-height: 0;
   }
   .left-rail {
+    order: 2;
+    flex: 0 0 auto;
     flex-direction: row;
+    justify-content: space-around;
+    align-items: stretch;
     width: 100%;
     border-right: none;
-    border-bottom: 1px solid var(--border);
-    padding: 6px 8px;
+    border-bottom: none;
+    border-top: 1px solid var(--border);
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--bg-soft);
+    z-index: 20;
+    gap: 0;
   }
-  .left-rail-item { flex: 0 0 auto; }
+  .left-rail-item {
+    flex: 1 1 0;
+    min-width: 56px;
+    min-height: 48px;
+    width: auto;
+    max-width: 96px;
+    padding: 6px 2px;
+    gap: 3px;
+  }
+  .left-rail-label {
+    max-width: 72px;
+    font-size: 10px;
+  }
+  .left-rail-item--active::before {
+    /* Move the active indicator to the top edge of the bottom bar. */
+    left: 20%;
+    right: 20%;
+    top: 0;
+    bottom: auto;
+    width: auto;
+    height: 2px;
+    border-radius: 0 0 2px 2px;
+  }
   .system-page {
     padding: 14px 14px 40px;
     gap: 14px;
@@ -7154,6 +7282,247 @@ body::before {
   background: var(--panel-2);
 }
 .sd-dirty.hidden { display: none; }
+
+/* ── new session dialog ─────────────────────────────────────────────── */
+.nsd-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  padding-top: calc(16px + env(safe-area-inset-top));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+.nsd-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+.nsd-card {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 100%);
+  max-height: min(92dvh, 900px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.nsd-head { flex: 0 0 auto; }
+.nsd-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.nsd-foot { flex: 0 0 auto; }
+.nsd-cwd-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.nsd-cwd-row .nsd-cwd-input { flex: 1 1 auto; min-width: 0; }
+.nsd-cwd-row .btn {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.nsd-browse-toggle--on {
+  color: var(--teal);
+  border-color: rgba(94, 234, 212, 0.45);
+}
+.nsd-recent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.nsd-recent[hidden] { display: none; }
+.nsd-recent-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-right: 2px;
+}
+.nsd-recent-chip {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nsd-recent-chip:hover {
+  color: var(--teal);
+  border-color: var(--border-2);
+}
+.nsd-folder-panel {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 280px;
+  overflow: hidden;
+}
+.nsd-folder-panel[hidden] { display: none; }
+.nsd-folder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.nsd-folder-toolbar-spacer { flex: 1; }
+.nsd-folder-nav,
+.nsd-folder-use {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+.nsd-folder-path {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px dashed var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+}
+.nsd-folder-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+}
+.nsd-folder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  min-height: 44px;
+}
+.nsd-folder-item:last-child { border-bottom: none; }
+.nsd-folder-item:hover,
+.nsd-folder-item:focus-visible {
+  background: var(--panel-2);
+  color: var(--teal);
+  outline: none;
+}
+.nsd-folder-item-ico {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+.nsd-folder-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nsd-folder-empty {
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 12px;
+}
+.nsd-folder-empty--err { color: var(--red); }
+.nsd-folder-status {
+  flex: 0 0 auto;
+  padding: 4px 10px 6px;
+  font-size: 10px;
+  color: var(--dim);
+  border-top: 1px solid var(--border);
+}
+.nsd-advanced-toggle {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-align: left;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.nsd-advanced-toggle:hover { color: var(--teal); }
+.nsd-advanced-body { display: flex; flex-direction: column; gap: 18px; }
+.nsd-advanced-body[hidden] { display: none; }
+.nsd-error {
+  color: var(--red);
+  font-size: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 123, 114, 0.35);
+  border-radius: 6px;
+  background: rgba(255, 123, 114, 0.08);
+}
+.nsd-error[hidden] { display: none; }
+
+.nsd-worktree-toggle {
+  margin-top: 4px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.nsd-worktree-name {
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-left: 4px;
+}
+.nsd-worktree-name:empty { display: none; }
+.nsd-worktree-regen {
+  margin-left: 6px;
+  min-width: 28px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.nsd-worktree-regen[hidden] { display: none; }
+
+@media (max-width: 720px) {
+  .nsd-modal { padding: 8px; align-items: flex-end; }
+  .nsd-card {
+    width: 100%;
+    max-height: min(94dvh, 100%);
+    border-radius: 12px 12px 0 0;
+  }
+  .nsd-cwd-row { flex-wrap: wrap; }
+  .nsd-cwd-row .nsd-cwd-input { flex: 1 1 100%; min-height: 44px; font-size: 16px; }
+  .nsd-cwd-row .btn { min-height: 44px; flex: 1 1 auto; }
+  .nsd-folder-panel { max-height: 40vh; }
+  .sd-grid { grid-template-columns: 1fr; }
+  .nsd-body .sd-input,
+  .nsd-body select.sd-input,
+  .nsd-body textarea.sd-input { font-size: 16px; }
+}
 
 /* ----- publish ----- */
 .info-publish {

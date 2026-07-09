@@ -199,12 +199,12 @@ export class ChatView {
           type: 'button',
           onclick: () => {
             // Make sure the sidebar is visible (desktop: dispatch toggle if
-            // currently collapsed; mobile: open the drawer).
+            // currently collapsed; mobile: open the drawer with backdrop).
             try {
               const collapsed = (localStorage.getItem('grok-remote.split.sidebar.collapsed') === '1');
               if (collapsed) document.dispatchEvent(new CustomEvent('grok-remote:sidebar-toggle'));
             } catch { /* ignore */ }
-            document.body.setAttribute('data-drawer-open', '1');
+            document.dispatchEvent(new CustomEvent('grok-remote:open-drawer'));
           },
         }, 'Select conversation'),
         el('button', {
@@ -1251,14 +1251,28 @@ export class ChatView {
         this.streamEl.appendChild(this._buildLoadEarlierBanner(total - returned));
       }
       this._isReplaying = true;
+      // Skip ACP session/load events we've already applied. Reconnect used
+      // to re-append the whole transcript (same _meta.eventId twice).
+      const seenAcpIds = new Set<string>();
       try {
         for (const ev of events) {
           const name = ev.event || ev.type || ev.name;
           const data = ev.data || ev.payload || ev;
           if (!name) continue;
+          const acpId = data && data._meta && typeof data._meta.eventId === 'string'
+            ? data._meta.eventId
+            : null;
+          if (acpId) {
+            if (seenAcpIds.has(acpId)) continue;
+            seenAcpIds.add(acpId);
+          }
           // Stash event timestamp so bubble renders pick up the real time
           // rather than "now" during a history replay.
-          const t = Date.parse(ev.at);
+          // Prefer the original agent timestamp from session/load replay.
+          const agentTs = data && data._meta && Number(data._meta.agentTimestampMs);
+          const t = Number.isFinite(agentTs) && agentTs > 0
+            ? agentTs
+            : Date.parse(ev.at);
           if (Number.isFinite(t)) this._lastEventTs = t;
           this.handleEvent(name, data, { fromHistory: true });
         }
@@ -2268,7 +2282,10 @@ export class ChatView {
   handleEvent(name: any, payload: any, opts?: any) {
     const data = unwrap(payload);
     switch (name) {
-      case 'user_message':              return this.onUserMessage(data, opts);
+      case 'user_message':
+      // session/load and live ACP emit user turns as user_message_chunk
+      // (often the full prompt in one chunk). Treat as a turn boundary.
+      case 'user_message_chunk':         return this.onUserMessage(data, opts);
       case 'agent_message_chunk':       return this.onMessageChunk(data, opts);
       case 'agent_thought_chunk':       return this.onThoughtChunk(data, opts);
       case 'tool_call':                 return this.onToolCall(data, opts);
@@ -2292,6 +2309,7 @@ export class ChatView {
     // Dedup: the live send() path calls startTurn(text) BEFORE the server
     // echoes user_message back over SSE. If the active turn already has the
     // same userText and no assistant/tools yet, the bubble is already there.
+    // Also covers user_message + user_message_chunk for the same prompt.
     if (
       this.activeTurn &&
       (this.activeTurn.userText === text ||
@@ -2300,6 +2318,17 @@ export class ChatView {
       (!this.activeTurn.tools || !this.activeTurn.tools.length)
     ) {
       return;
+    }
+    // New user turn while a previous one is still "open" (common for
+    // session/load replay which never emits prompt_complete): close it.
+    if (
+      this.activeTurn &&
+      (this.activeTurn.assistant ||
+        (this.activeTurn.tools && this.activeTurn.tools.length) ||
+        this.activeTurn.thinking ||
+        (this.activeTurn.userText && this.activeTurn.userText !== text))
+    ) {
+      this.endTurn(null);
     }
     this.startTurn(text, {
       ts: this._lastEventTs || Date.now(),

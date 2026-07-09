@@ -34,6 +34,7 @@ import {
   readReleases,
   type UpdateStepEvent,
 } from './lib/version-update.js';
+import { browseDirectory } from './lib/fs-browse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -244,6 +245,22 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: string,
     return;
   }
 
+  // Host directory browser for the new-session folder picker.
+  if (url === '/api/fs/browse' && method === 'GET') {
+    try {
+      const full = req.url || '';
+      const qIdx = full.indexOf('?');
+      const qs = qIdx >= 0 ? new URLSearchParams(full.slice(qIdx + 1)) : new URLSearchParams();
+      const rawPath = qs.get('path');
+      const result = browseDirectory(rawPath);
+      sendJson(res, 200, { ok: !result.error, ...result });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sendJson(res, 500, { ok: false, error: msg });
+    }
+    return;
+  }
+
   if (url === '/api/agents' && method === 'GET') {
     sendJson(res, 200, manager.list());
     return;
@@ -411,11 +428,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: string,
       if (typeof settings['alwaysApprove'] !== 'boolean' && typeof defaults.autoApprove === 'boolean') {
         settings['alwaysApprove'] = defaults.autoApprove;
       }
+      const lastSessionId = body['lastSessionId'] ?? body['sessionId'];
       const merged = {
         ...body,
         settings,
+        ...(lastSessionId != null ? { lastSessionId } : {}),
         ...(!body['cwd'] && defaults.defaultCwd ? { cwd: defaults.defaultCwd } : {}),
       };
+      delete (merged as Record<string, unknown>)['sessionId'];
       const rec = await manager.spawn(merged as never);
       sendJson(res, 201, rec);
     } catch (err) {
@@ -638,13 +658,39 @@ interface SliceHistoryResult { text: string; totalTurns: number; returnedTurns: 
 function sliceHistoryByTurns(raw: string, { all, turns }: SliceHistoryOptions): SliceHistoryResult {
   if (!raw) return { text: '', totalTurns: 0, returnedTurns: 0 };
   const lines = raw.split('\n').filter(Boolean);
+  // Turn boundaries: grok-remote's own `user_message`, plus ACP
+  // `user_message_chunk` from session/load replay of external sessions.
+  // De-dupe consecutive boundaries that carry the same text (UI send emits
+  // both user_message and a matching chunk).
   const userMessageIndices: number[] = [];
+  const seenBoundaryTexts = new Set<string>();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] || '';
-    if (line.indexOf('"user_message"') === -1) continue;
+    if (line.indexOf('user_message') === -1) continue;
     try {
-      const obj = JSON.parse(line) as { event?: string };
-      if (obj && obj.event === 'user_message') userMessageIndices.push(i);
+      const obj = JSON.parse(line) as {
+        event?: string;
+        data?: { text?: unknown; update?: { content?: { text?: unknown } | string } };
+      };
+      if (!obj || (obj.event !== 'user_message' && obj.event !== 'user_message_chunk')) continue;
+      let text = '';
+      if (obj.event === 'user_message') {
+        text = typeof obj.data?.text === 'string' ? obj.data.text : '';
+      } else {
+        const c = obj.data?.update?.content;
+        if (typeof c === 'string') text = c;
+        else if (c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string') {
+          text = String((c as { text: string }).text);
+        }
+      }
+      const key = text.trim();
+      // Skip empty boundaries. session/load + UI send can each emit the
+      // same prompt more than once — count a given user text as one turn
+      // (first occurrence wins).
+      if (!key) continue;
+      if (seenBoundaryTexts.has(key)) continue;
+      seenBoundaryTexts.add(key);
+      userMessageIndices.push(i);
     } catch { /* skip malformed */ }
   }
   const totalTurns = userMessageIndices.length;
@@ -1246,9 +1292,14 @@ function handleStream(req: IncomingMessage, res: ServerResponse, id: string): vo
   if (!ring) { sendJson(res, 404, { ok: false, error: 'agent not found' }); return; }
 
   sseHeaders(res);
+  // Only gap-fill from the ring when the browser reconnects with
+  // Last-Event-ID. A fresh open (after GET /history) must NOT dump the
+  // ring — that re-applied the same turns and garbled the chat UI.
   const lastId = req.headers['last-event-id'] as string | undefined;
-  for (const ev of ring.since(lastId)) {
-    sseWrite(res, ev);
+  if (lastId) {
+    for (const ev of ring.since(lastId)) {
+      sseWrite(res, ev);
+    }
   }
 
   const unsub = manager.subscribe(id, (ev) => sseWrite(res, ev));

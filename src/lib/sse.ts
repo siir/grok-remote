@@ -9,6 +9,8 @@
 //   plus our own lifecycle ones: agent_status, prompt_complete, error.
 
 const KNOWN_EVENTS = [
+  'user_message',
+  'user_message_chunk',
   'agent_message_chunk',
   'agent_thought_chunk',
   'tool_call',
@@ -20,6 +22,8 @@ const KNOWN_EVENTS = [
   'prompt_complete',
   'error',
   'session_notification',
+  'handshake',
+  'session_ready',
 ] as const;
 
 export type StreamEventName = (typeof KNOWN_EVENTS)[number] | 'message';

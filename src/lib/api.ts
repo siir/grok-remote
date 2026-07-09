@@ -127,6 +127,16 @@ export const api = {
   getSettings:  (): Promise<unknown> => request('GET',    '/api/settings'),
   patchSettings:(body: Record<string, unknown>): Promise<unknown> => request('PATCH', '/api/settings', body),
 
+  /** Host filesystem browse (directories only) for the new-session picker. */
+  fs: {
+    browse: (dirPath?: string | null): Promise<unknown> => {
+      const qs = new URLSearchParams();
+      if (dirPath != null && String(dirPath).length) qs.set('path', String(dirPath));
+      const tail = qs.toString();
+      return request('GET', `/api/fs/browse${tail ? `?${tail}` : ''}`);
+    },
+  },
+
   mcp: {
     list:     (): Promise<unknown>      => request('GET',    '/api/system/mcp'),
     add:      (body?: Record<string, unknown>): Promise<unknown>  => request('POST',   '/api/system/mcp', body || {}),

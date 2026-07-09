@@ -62,6 +62,35 @@ interface AgentRecord extends AgentMeta {
   inFlight?: number;
   _inFlightIds?: Set<string>;
   _lastTokenEmit?: number;
+  /** ACP replay event ids already written to history (skip on reconnect). */
+  _seenAcpEventIds?: Set<string>;
+}
+
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Scan on-disk history for ACP replay event ids so reconnect skips them. */
+function loadSeenAcpEventIds(agentId: string): Set<string> {
+  const seen = new Set<string>();
+  let raw = '';
+  try { raw = fs.readFileSync(historyPath(agentId), 'utf8'); } catch { return seen; }
+  if (!raw) return seen;
+  for (const line of raw.split('\n')) {
+    if (!line || line.indexOf('eventId') === -1) continue;
+    try {
+      const obj = JSON.parse(line) as { data?: { _meta?: { eventId?: unknown; isReplay?: unknown } } };
+      const id = obj?.data?._meta?.eventId;
+      if (typeof id === 'string' && id) seen.add(id);
+    } catch { /* skip malformed */ }
+  }
+  return seen;
+}
+
+/** Validate a grok session UUID for resume-on-spawn (`lastSessionId`). */
+export function normalizeLastSessionId(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const id = raw.trim();
+  if (!id || !SESSION_ID_RE.test(id)) return null;
+  return id;
 }
 
 export interface AgentSpawnOptions {
@@ -69,6 +98,7 @@ export interface AgentSpawnOptions {
   model?: string;
   cwd?: string;
   settings?: AcpClientSettings | null;
+  lastSessionId?: string | null;
 }
 
 export interface AgentPatch {
@@ -409,6 +439,22 @@ export class AgentManager extends EventEmitter {
 
   private _emitEventFactory(record: AgentRecord): (event: string, data: Record<string, unknown>) => void {
     return (event: string, data: Record<string, unknown>): void => {
+      // session/load re-emits prior turns with _meta.isReplay + a stable
+      // ACP eventId. On reconnect those would double-append to history and
+      // garble the UI. Drop duplicates we already persisted.
+      const meta = data && typeof data === 'object'
+        ? (data['_meta'] as Record<string, unknown> | undefined)
+        : undefined;
+      const acpEventId = meta && typeof meta['eventId'] === 'string' ? meta['eventId'] : null;
+      const isReplay = !!(meta && meta['isReplay']);
+      if (isReplay && acpEventId) {
+        if (!record._seenAcpEventIds) {
+          record._seenAcpEventIds = loadSeenAcpEventIds(record.id);
+        }
+        if (record._seenAcpEventIds.has(acpEventId)) return;
+        record._seenAcpEventIds.add(acpEventId);
+      }
+
       record.eventCounter = (record.eventCounter || 0) + 1;
       const eventId = `${Date.now()}-${record.eventCounter}`;
       const wrapped: AgentRingEntry = { id: eventId, event, data: { ...data, _t: Date.now() } };
@@ -568,7 +614,12 @@ export class AgentManager extends EventEmitter {
     client.on('stderr', (chunk: string) => emitEvent('stderr', { chunk }));
   }
 
-  async spawn({ name, model, cwd, settings }: AgentSpawnOptions = {}): Promise<PublicAgent> {
+  async spawn({ name, model, cwd, settings, lastSessionId }: AgentSpawnOptions = {}): Promise<PublicAgent> {
+    const resumeId = normalizeLastSessionId(lastSessionId);
+    if (lastSessionId != null && String(lastSessionId).trim() && !resumeId) {
+      throw new Error('invalid lastSessionId');
+    }
+
     const id = randomUUID();
     ensureAgentDirs(id);
     const dir = agentDir(id);
@@ -584,7 +635,7 @@ export class AgentManager extends EventEmitter {
       cwd: workCwd,
       createdAt: nowIso(),
       lastSeen: nowIso(),
-      lastSessionId: null,
+      lastSessionId: resumeId,
       lastError: null,
       starred: false,
       archived: false,
@@ -598,7 +649,11 @@ export class AgentManager extends EventEmitter {
     this.agents.set(id, record);
     writeMeta(record);
 
-    historyAppend(id, { at: nowIso(), event: 'agent_created', data: { id, name: record.name, cwd: workCwd } });
+    historyAppend(id, {
+      at: nowIso(),
+      event: 'agent_created',
+      data: { id, name: record.name, cwd: workCwd, lastSessionId: resumeId },
+    });
 
     this._connectRecord(record);
     const pub = this._publicRecord(record);

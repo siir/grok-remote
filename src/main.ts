@@ -126,6 +126,26 @@ function toggleDrawer(): void {
   else openDrawer();
 }
 
+/** Keep the shell height synced to the visible viewport so the iOS
+ *  software keyboard resizes the layout instead of covering the composer. */
+function installViewportHeightVar(): void {
+  const root = document.documentElement;
+  const apply = (): void => {
+    const vv = window.visualViewport;
+    const h = vv ? vv.height : window.innerHeight;
+    if (typeof h === 'number' && isFinite(h) && h > 0) {
+      root.style.setProperty('--app-height', `${Math.round(h)}px`);
+    }
+  };
+  apply();
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', apply);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', apply);
+    window.visualViewport.addEventListener('scroll', apply);
+  }
+}
+
 interface RailIconOpts {
   href: string;
   title: string;
@@ -200,6 +220,11 @@ function mountDashboard(): void {
 
   const mainHost = el('div', { class: 'main-pane' });
   const railHost = buildLeftRail();
+  // Bottom-nav taps should dismiss the conversations drawer on phones.
+  railHost.addEventListener('click', (ev) => {
+    const t = ev.target as Element | null;
+    if (t && t.closest && t.closest('.left-rail-item')) closeDrawer();
+  });
   const shell = el('div', { class: 'dashboard dashboard--with-rail' });
   host.appendChild(shell);
   shell.appendChild(railHost);
@@ -329,6 +354,8 @@ function mountDashboard(): void {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  installViewportHeightVar();
+
   void pingHello();
   setInterval(() => { void pingHello(); }, 10000);
 
@@ -362,6 +389,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   document.addEventListener('grok-remote:close-drawer', () => closeDrawer());
+  document.addEventListener('grok-remote:open-drawer', () => openDrawer());
 
   registerPwa();
 
