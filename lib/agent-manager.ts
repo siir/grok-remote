@@ -358,19 +358,26 @@ export class AgentManager extends EventEmitter {
 
   private _publicRecord(a: AgentRecord): PublicAgent {
     const handshake = a.client?.handshake as { _meta?: unknown; agentCapabilities?: unknown } | null;
+    // Live session id only — do not fall back to lastSessionId here or the
+    // UI thinks resume finished before handshake. lastSessionId is separate.
+    const liveSessionId = a.client?.sessionId || null;
+    const status = a.client?.status || a.status || 'disconnected';
+    // "connected" means a live ACP session is ready, not merely that a
+    // child process object exists (starting/errored looked live before).
+    const connected = !!(a.client && liveSessionId && status !== 'errored' && status !== 'exited');
     return {
       id: a.id,
       name: a.name,
       model: a.client?.modelId || a.modelHint || null,
-      status: a.client?.status || a.status || 'disconnected',
-      connected: !!a.client,
+      status,
+      connected,
       cwd: a.cwd,
       createdAt: a.createdAt,
       lastSeen: a.lastSeen,
-      lastSessionId: a.client?.sessionId || a.lastSessionId || null,
+      lastSessionId: liveSessionId || a.lastSessionId || null,
       handshakeMeta: handshake?._meta || null,
       agentCapabilities: handshake?.agentCapabilities || null,
-      sessionId: a.client?.sessionId || a.lastSessionId || null,
+      sessionId: liveSessionId,
       availableCommands: a.client?.availableCommands || [],
       lastError: a.client?.lastError || a.lastError || null,
       exitInfo: a.client?.exitInfo || null,
@@ -402,9 +409,7 @@ export class AgentManager extends EventEmitter {
       a.archivedAt = patch.archived ? nowIso() : null;
       changed = true;
       if (patch.archived && a.client) {
-        try { await a.client.shutdown('SIGTERM'); } catch { /* ignore */ }
-        a.client = null;
-        a.status = 'disconnected';
+        await this._detachClient(a, 'archived');
       }
     }
     if (patch.settings === null) {
@@ -484,13 +489,17 @@ export class AgentManager extends EventEmitter {
       emitEvent('handshake', { meta: h?._meta || null, agentCapabilities: h?.agentCapabilities || null });
     });
     client.on('session_ready', (s: { sessionId?: string; resumed?: boolean }) => {
+      if (record.client !== client) return;
       if (s && s.sessionId) {
         record.lastSessionId = s.sessionId;
         writeMeta(record);
       }
       emitEvent('session_ready', s as unknown as Record<string, unknown>);
+      // Surface connected:true to list subscribers (spawn returned early).
+      this.emit('list_changed', { event: 'agent_status', id: record.id, status: 'idle', agent: this._publicRecord(record) });
     });
     client.on('update', (params: { update?: Record<string, unknown>; _meta?: Record<string, unknown>; sessionId?: string }) => {
+      if (record.client !== client) return;
       const u = params?.update || {};
       const event = (u['sessionUpdate'] as string) || 'update';
       const meta = params?._meta;
@@ -592,26 +601,74 @@ export class AgentManager extends EventEmitter {
     client.on('prompt_complete', (params: Record<string, unknown>) => emitEvent('prompt_complete', params));
     client.on('prompt_result',  (result: Record<string, unknown>) => emitEvent('prompt_result', result));
     client.on('error', (err: Error | { message?: string }) => {
+      // Ignore events from a detached/stale client instance.
+      if (record.client !== client) return;
+      if (!this.agents.has(record.id)) return;
       record.lastError = (err && (err as Error).message) || String(err);
       writeMeta(record);
       emitEvent('error', { message: record.lastError });
+      this.emit('list_changed', { event: 'agent_status', id: record.id, status: record.client?.status || 'errored' });
     });
     client.on('exit', (info: Record<string, unknown>) => {
-      emitEvent('agent_exited', info);
-      if (record.client === client) {
-        record.client = null;
-        record.status = 'disconnected';
-        writeMeta(record);
-        if (record._inFlightIds) record._inFlightIds.clear();
-        if (record.inFlight) {
-          record.inFlight = 0;
-          this.emit('list_changed', { event: 'agent_inflight', id: record.id, inFlight: 0 });
-        }
-        emitEvent('agent_status', { status: 'disconnected', reason: 'process_exit' });
-        this.emit('list_changed', { event: 'agent_status', id: record.id, status: 'disconnected' });
+      // Never resurrect a killed agent: if the record was removed from the
+      // map, drop all post-exit persistence.
+      if (!this.agents.has(record.id)) {
+        try { client.removeAllListeners(); } catch { /* ignore */ }
+        return;
       }
+      if (record.client !== client) {
+        try { client.removeAllListeners(); } catch { /* ignore */ }
+        return;
+      }
+      const code = typeof info['code'] === 'number' ? info['code'] : null;
+      const signal = info['signal'] != null ? String(info['signal']) : null;
+      // Unexpected non-zero exit without signal → surface as lastError.
+      if (code != null && code !== 0 && !signal) {
+        record.lastError = `agent exited with code ${code}`;
+      }
+      emitEvent('agent_exited', info);
+      record.client = null;
+      record.status = 'disconnected';
+      writeMeta(record);
+      if (record._inFlightIds) record._inFlightIds.clear();
+      if (record.inFlight) {
+        record.inFlight = 0;
+        this.emit('list_changed', { event: 'agent_inflight', id: record.id, inFlight: 0 });
+      }
+      emitEvent('agent_status', { status: 'disconnected', reason: 'process_exit', code, signal });
+      this.emit('list_changed', { event: 'agent_status', id: record.id, status: 'disconnected' });
+      try { client.removeAllListeners(); } catch { /* ignore */ }
     });
-    client.on('stderr', (chunk: string) => emitEvent('stderr', { chunk }));
+    client.on('stderr', (chunk: string) => {
+      if (record.client !== client) return;
+      emitEvent('stderr', { chunk });
+    });
+  }
+
+  /** Detach client, await process death, strip listeners. Safe if no client. */
+  private async _detachClient(record: AgentRecord, reason: string): Promise<void> {
+    const client = record.client;
+    if (!client) {
+      record.status = 'disconnected';
+      return;
+    }
+    if (client.sessionId) record.lastSessionId = client.sessionId;
+    record.client = null;
+    record.status = 'disconnected';
+    writeMeta(record);
+    try { await client.shutdown('SIGTERM'); } catch { /* ignore */ }
+    try { client.removeAllListeners(); } catch { /* ignore */ }
+    if (record._inFlightIds) record._inFlightIds.clear();
+    if (record.inFlight) {
+      record.inFlight = 0;
+      this.emit('list_changed', { event: 'agent_inflight', id: record.id, inFlight: 0 });
+    }
+    // Only emit status if the agent still exists (kill removes it first).
+    if (this.agents.has(record.id)) {
+      const emitEvent = this._emitEventFactory(record);
+      emitEvent('agent_status', { status: 'disconnected', reason });
+      this.emit('list_changed', { event: 'agent_status', id: record.id, status: 'disconnected' });
+    }
   }
 
   async spawn({ name, model, cwd, settings, lastSessionId }: AgentSpawnOptions = {}): Promise<PublicAgent> {
@@ -623,7 +680,23 @@ export class AgentManager extends EventEmitter {
     const id = randomUUID();
     ensureAgentDirs(id);
     const dir = agentDir(id);
-    const workCwd = cwd && fs.existsSync(cwd) ? path.resolve(cwd) : path.join(dir, 'cwd');
+    let workCwd: string;
+    if (cwd != null && String(cwd).trim()) {
+      const resolved = path.resolve(String(cwd).trim());
+      if (!fs.existsSync(resolved)) {
+        throw new Error(`cwd does not exist: ${resolved}`);
+      }
+      let st: fs.Stats;
+      try { st = fs.statSync(resolved); } catch {
+        throw new Error(`cwd not accessible: ${resolved}`);
+      }
+      if (!st.isDirectory()) {
+        throw new Error(`cwd is not a directory: ${resolved}`);
+      }
+      workCwd = resolved;
+    } else {
+      workCwd = path.join(dir, 'cwd');
+    }
     fs.mkdirSync(workCwd, { recursive: true });
 
     const ring = createRing<AgentRingEntry>(SSE_RING_LIMIT);
@@ -674,9 +747,18 @@ export class AgentManager extends EventEmitter {
     const emitEvent = this._emitEventFactory(record);
     emitEvent('agent_status', { status: 'starting' });
     client.start({ resumeSessionId: record.lastSessionId || null }).catch((err: Error | { message?: string }) => {
+      if (!this.agents.has(record.id)) return;
       record.lastError = (err && (err as Error).message) || String(err);
+      // start() already killed the child on handshake failure; ensure we
+      // drop a half-attached client so connected stays false.
+      if (record.client === client) {
+        record.client = null;
+        record.status = 'errored';
+      }
       writeMeta(record);
       emitEvent('error', { message: record.lastError });
+      this.emit('list_changed', { event: 'agent_status', id: record.id, status: 'errored' });
+      try { client.removeAllListeners(); } catch { /* ignore */ }
     });
     return client;
   }
@@ -693,31 +775,23 @@ export class AgentManager extends EventEmitter {
     const a = this.agents.get(id);
     if (!a) throw new Error('agent not found');
     if (!a.client) return this._publicRecord(a);
-    const client = a.client;
-    a.client = null;
-    a.status = 'disconnected';
-    if (client.sessionId) a.lastSessionId = client.sessionId;
-    writeMeta(a);
-    try { await client.shutdown('SIGTERM'); } catch { /* ignore */ }
-    const emitEvent = this._emitEventFactory(a);
-    if (a._inFlightIds) a._inFlightIds.clear();
-    if (a.inFlight) {
-      a.inFlight = 0;
-      this.emit('list_changed', { event: 'agent_inflight', id: a.id, inFlight: 0 });
-    }
-    emitEvent('agent_status', { status: 'disconnected', reason: 'user_request' });
-    this.emit('list_changed', { event: 'agent_status', id: a.id, status: 'disconnected' });
+    await this._detachClient(a, 'user_request');
     return this._publicRecord(a);
   }
 
   async kill(id: string): Promise<boolean> {
     const a = this.agents.get(id);
     if (!a) return false;
-    if (a.client) {
-      try { await a.client.shutdown('SIGTERM'); } catch { /* ignore */ }
-    }
+    // Remove from the map FIRST so any late exit handlers never rewrite meta.
     this.agents.delete(id);
     this.emit('list_changed', { event: 'agent_removed', id });
+    const client = a.client;
+    a.client = null;
+    a.status = 'disconnected';
+    if (client) {
+      try { await client.shutdown('SIGTERM'); } catch { /* ignore */ }
+      try { client.removeAllListeners(); } catch { /* ignore */ }
+    }
     try {
       const dir = agentDir(id);
       if (dir.startsWith(AGENTS_ROOT + path.sep)) {
@@ -816,17 +890,27 @@ export class AgentManager extends EventEmitter {
       ? { text: finalText, attachments: histAttachments }
       : { text: finalText };
     historyAppend(id, { at: nowIso(), event: 'user_message', data: histData });
-    a.ring.push({
-      id: `${Date.now()}-user`,
+    // One shared id for ring + SSE so Last-Event-ID reconnect gap-fill works.
+    const userEvId = `${Date.now()}-user`;
+    const userEv: AgentRingEntry = {
+      id: userEvId,
       event: 'user_message',
       data: { ...histData, _t: Date.now() },
+    };
+    a.ring.push(userEv);
+    this.emit(`agent:${id}`, userEv);
+    a.client.prompt(blocks).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      a.lastError = msg;
+      writeMeta(a);
+      const emitEvent = this._emitEventFactory(a);
+      emitEvent('error', { message: msg, source: 'prompt' });
+      this.emit('list_changed', {
+        event: 'agent_status',
+        id: a.id,
+        status: a.client?.status || 'errored',
+      });
     });
-    this.emit(`agent:${id}`, {
-      id: `${Date.now()}-user`,
-      event: 'user_message',
-      data: { ...histData, _t: Date.now() },
-    });
-    a.client.prompt(blocks).catch(() => { /* error already emitted */ });
     return {
       ok: true,
       debug: {
@@ -854,8 +938,12 @@ export class AgentManager extends EventEmitter {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (record.client && record.client.sessionId) return;
-      if (record.client && record.client.status === 'errored') {
-        throw new Error(record.client.lastError || 'agent errored during reconnect');
+      if (!record.client) {
+        throw new Error(record.lastError || 'agent process exited during reconnect');
+      }
+      const st = record.client.status;
+      if (st === 'errored' || st === 'exited') {
+        throw new Error(record.client.lastError || record.lastError || `agent ${st} during reconnect`);
       }
       await new Promise<void>((r) => setTimeout(r, 100));
     }

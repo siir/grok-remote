@@ -209,6 +209,10 @@ export class AcpClient extends EventEmitter {
       this.lastError = msg;
       this.setStatus('errored', { error: msg });
       this.emit('error', err);
+      // Tear down the child so we never leave a half-dead grok process that
+      // still looks "connected" to the manager (client object exists).
+      try { await this.shutdown('SIGTERM'); } catch { /* ignore */ }
+      throw err instanceof Error ? err : new Error(msg);
     }
   }
 
@@ -262,13 +266,27 @@ export class AcpClient extends EventEmitter {
     this.proc.stdin.write(JSON.stringify(msg) + '\n');
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  /** Default RPC timeout — hung initialize/session/* must not block forever. */
+  static readonly RPC_TIMEOUT_MS = 30_000;
+
+  request(method: string, params?: unknown, timeoutMs: number = AcpClient.RPC_TIMEOUT_MS): Promise<unknown> {
     const id = `c-${this._nextId++}`;
     return new Promise<unknown>((resolve, reject) => {
-      this._pending.set(id, { resolve, reject, method });
+      const timer = setTimeout(() => {
+        if (!this._pending.has(id)) return;
+        this._pending.delete(id);
+        reject(new Error(`rpc timeout after ${timeoutMs}ms: ${method}`));
+      }, timeoutMs);
+      timer.unref?.();
+      this._pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+        method,
+      });
       try {
         this._send({ jsonrpc: '2.0', id, method, params });
       } catch (err) {
+        clearTimeout(timer);
         this._pending.delete(id);
         reject(err);
       }
@@ -379,7 +397,15 @@ export class AcpClient extends EventEmitter {
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.setStatus('errored', { error: msg });
+      // Cancel aborts in-flight prompts — treat as idle, not a hard error.
+      const cancelled = /cancel/i.test(msg);
+      if (cancelled) {
+        this.setStatus('idle');
+      } else {
+        this.lastError = msg;
+        this.setStatus('errored', { error: msg });
+        this.emit('error', err instanceof Error ? err : new Error(msg));
+      }
       throw err;
     }
   }
@@ -388,21 +414,32 @@ export class AcpClient extends EventEmitter {
     if (!this.sessionId) return { cancelled: false, reason: 'no session' };
     try {
       const result = await this.request('session/cancel', { sessionId: this.sessionId });
+      this.setStatus('idle');
       return { cancelled: true, result };
     } catch (err) {
       try {
         this.notify('session/cancel', { sessionId: this.sessionId });
       } catch { /* ignore */ }
+      this.setStatus('idle');
       const msg = err instanceof Error ? err.message : String(err);
       return { cancelled: true, fallback: 'notification', error: msg };
     }
   }
 
   async shutdown(signal: NodeJS.Signals = 'SIGTERM'): Promise<void> {
-    if (this._closing) return;
+    if (this._closing) {
+      // Already shutting down — wait for exit if still alive.
+      await this._waitForExit(3000);
+      return;
+    }
     this._closing = true;
     this.terminalHost.shutdownAll();
-    if (this.proc && !this.proc.killed) {
+    // Reject any in-flight RPCs so callers don't hang past process death.
+    for (const [, pending] of this._pending) {
+      pending.reject(new Error('agent shutting down'));
+    }
+    this._pending.clear();
+    if (this.proc && this.proc.exitCode == null && !this.proc.killed) {
       try { this.proc.kill(signal); } catch { /* ignore */ }
       const proc = this.proc;
       const timer = setTimeout(() => {
@@ -411,6 +448,21 @@ export class AcpClient extends EventEmitter {
         }
       }, 2000);
       timer.unref?.();
+      await this._waitForExit(3500);
     }
+  }
+
+  private _waitForExit(timeoutMs: number): Promise<void> {
+    if (!this.proc || this.proc.exitCode != null) return Promise.resolve();
+    const proc = this.proc;
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      timer.unref?.();
+      proc.once('exit', done);
+    });
   }
 }

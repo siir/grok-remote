@@ -8,8 +8,18 @@ test('unwrap returns the inner .update object when present', () => {
   assert.deepEqual(unwrap({ update: inner }), inner);
 });
 
+test('unwrap preserves outer _meta and sessionId on the update', () => {
+  const inner = { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'pending' };
+  const meta = { updateParams: { status: 'completed' }, eventId: 'e1' };
+  const out = unwrap({ update: inner, _meta: meta, sessionId: 's1' });
+  assert.equal(out.sessionUpdate, 'tool_call_update');
+  assert.equal(out.toolCallId, 't1');
+  assert.equal(out.sessionId, 's1');
+  assert.deepEqual(out._meta, meta);
+});
+
 test('unwrap passes through a bare update payload unchanged', () => {
-  // SSE events already arrive unwrapped from the server.
+  // Bare payloads (no .update wrapper) pass through as-is.
   const inner = { sessionUpdate: 'tool_call_update' };
   assert.deepEqual(unwrap(inner), inner);
 });

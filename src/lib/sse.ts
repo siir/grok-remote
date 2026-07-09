@@ -20,8 +20,10 @@ const KNOWN_EVENTS = [
   'session_summary_generated',
   'agent_status',
   'prompt_complete',
+  'prompt_result',
   'error',
   'session_notification',
+  'x.ai/session_notification',
   'handshake',
   'session_ready',
 ] as const;

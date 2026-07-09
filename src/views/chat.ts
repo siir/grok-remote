@@ -198,13 +198,17 @@ export class ChatView {
           class: 'btn btn--ghost chat-empty-btn',
           type: 'button',
           onclick: () => {
-            // Make sure the sidebar is visible (desktop: dispatch toggle if
-            // currently collapsed; mobile: open the drawer with backdrop).
+            // Desktop: expand the collapsed Split sidebar.
+            // Mobile (≤720): open the off-canvas drawer + backdrop.
+            const mobile = typeof window !== 'undefined' && window.innerWidth <= 720;
+            if (mobile) {
+              document.dispatchEvent(new CustomEvent('grok-remote:open-drawer'));
+              return;
+            }
             try {
               const collapsed = (localStorage.getItem('grok-remote.split.sidebar.collapsed') === '1');
               if (collapsed) document.dispatchEvent(new CustomEvent('grok-remote:sidebar-toggle'));
             } catch { /* ignore */ }
-            document.dispatchEvent(new CustomEvent('grok-remote:open-drawer'));
           },
         }, 'Select conversation'),
         el('button', {
@@ -273,11 +277,17 @@ export class ChatView {
     this._attachComposerExtras();
     this._initAutoScroll();
 
-    // visibility change -> refresh history on becoming visible
+    // Visibility: light resync only when the agent is mid-turn — a full
+    // history wipe while SSE is live was interleaving and garbling the UI.
     this._onVisibility = () => {
-      if (document.visibilityState === 'visible' && this.agentId) {
-        this.refreshHistory().catch(() => {});
+      if (document.visibilityState !== 'visible' || !this.agentId) return;
+      const st = this.currentAgent && this.currentAgent.status;
+      if (st === 'running') {
+        // Keep the stream; just refresh status chrome.
+        this.showStatus('agent is running', 'warn');
+        return;
       }
+      this.refreshHistory().catch(() => {});
     };
     document.addEventListener('visibilitychange', this._onVisibility);
 
@@ -1011,19 +1021,21 @@ export class ChatView {
     this.refreshHistory()
       .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
       .finally(() => {
+        // Never open a stream for a stale setAgent call (fast A→B switch).
+        if (this.agentId !== agentIdAtCall) return;
         // Only show the intro if the agent we loaded history for is still
         // the active one (the user may have switched mid-load), there are
         // no turns yet (brand new conversation), and no other intro is in
         // flight. We also gate on activeTurn being null so we don't paint
         // the intro on top of an SSE event that raced in.
         if (
-          this.agentId === agentIdAtCall &&
           (!this.turns || this.turns.length === 0) &&
           !this.activeTurn &&
           !this._chatIntroAbort
         ) {
           this._playChatIntro();
         }
+        this.closeStream();
         this.openStreamForCurrent();
       });
 
@@ -1281,16 +1293,23 @@ export class ChatView {
       }
       this._lastEventTs = null;
       // History replay may end with an unterminated turn (interrupted session,
-      // or a prompt_complete that never made it to disk). Walk every turn and
-      // finalize any thinking pane that is still in its active/blinking state
-      // so the dots stop animating. Then close out the final active turn so
-      // the assistant bubble is finalized too.
+      // or a prompt_complete that never made it to disk). Finalize thinking
+      // panes so blinkers stop — but if the agent is still running, leave
+      // activeTurn open so live SSE chunks append instead of ensureTurn('').
       for (const turn of this.turns) {
+        if (turn === this.activeTurn) continue;
         if (turn.thinking && typeof turn.thinking.finalize === 'function') {
           turn.thinking.finalize();
         }
       }
-      if (this.activeTurn) this.endTurn(null);
+      const stillRunning = this.currentAgent && this.currentAgent.status === 'running';
+      if (this.activeTurn && !stillRunning) {
+        this.endTurn(null);
+      } else if (this.activeTurn && this.activeTurn.thinking
+                 && typeof this.activeTurn.thinking.finalize === 'function') {
+        // Running: stop the dots animation but keep the turn open for append.
+        try { this.activeTurn.thinking.finalize(); } catch { /* ignore */ }
+      }
       // Scroll the stream to the bottom after a history load. Reset
       // auto-scroll: the user just opened the conversation, they want to be
       // at the latest message regardless of where the last session ended.
@@ -2295,8 +2314,10 @@ export class ChatView {
       case 'handshake':                 return this.onHandshake(data);
       case 'session_summary_generated': return this.onSessionSummary(data);
       case 'prompt_complete':           return this.onPromptComplete(data);
+      case 'prompt_result':             return this.onPromptComplete(data);
       case 'agent_status':              return this.onAgentStatus(data);
-      case 'session_notification':      return this.onSessionNotification(data);
+      case 'session_notification':
+      case 'x.ai/session_notification': return this.onSessionNotification(data);
       case 'error':                     return this.onError(data);
       default: return;
     }
@@ -2620,6 +2641,9 @@ export class ChatView {
     const text = (data && (data.message || data.error)) || (typeof data === 'string' ? data : JSON.stringify(data));
     const turn = this.activeTurn || this.ensureTurn();
     turn.root.appendChild(renderErrorBanner(text));
+    this.showToast(String(text).slice(0, 160), 'fail');
+    this.showStatus('error', 'fail');
+    this.composerCancel.disabled = true;
     this.scrollToBottom();
   }
 

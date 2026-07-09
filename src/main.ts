@@ -108,6 +108,9 @@ function navigate(hash: string): void {
 }
 
 function openDrawer(): void {
+  // Drawer + backdrop only apply on the mobile layout (≤720). Calling this
+  // on desktop dims the whole app without showing the off-canvas sidebar.
+  if (typeof window !== 'undefined' && window.innerWidth > 720) return;
   document.body.setAttribute('data-drawer-open', '');
   const btn = document.getElementById('hamburger-btn');
   if (btn) btn.setAttribute('aria-expanded', 'true');

@@ -663,7 +663,7 @@ function sliceHistoryByTurns(raw: string, { all, turns }: SliceHistoryOptions): 
   // De-dupe consecutive boundaries that carry the same text (UI send emits
   // both user_message and a matching chunk).
   const userMessageIndices: number[] = [];
-  const seenBoundaryTexts = new Set<string>();
+  let lastBoundaryText = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] || '';
     if (line.indexOf('user_message') === -1) continue;
@@ -684,12 +684,11 @@ function sliceHistoryByTurns(raw: string, { all, turns }: SliceHistoryOptions): 
         }
       }
       const key = text.trim();
-      // Skip empty boundaries. session/load + UI send can each emit the
-      // same prompt more than once — count a given user text as one turn
-      // (first occurrence wins).
+      // Skip empty. Only collapse adjacent duplicates (UI send + echo chunk);
+      // legitimate later repeats of the same prompt stay as new turns.
       if (!key) continue;
-      if (seenBoundaryTexts.has(key)) continue;
-      seenBoundaryTexts.add(key);
+      if (key === lastBoundaryText) continue;
+      lastBoundaryText = key;
       userMessageIndices.push(i);
     } catch { /* skip malformed */ }
   }

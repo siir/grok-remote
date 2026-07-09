@@ -10,18 +10,26 @@ interface MaybeUpdateWrapper {
 }
 
 /**
- * Some history endpoints wrap the ACP `update` object inside an envelope:
- * `{ update: { ... } }`. SSE events arrive already unwrapped by the server.
- * Returns the inner update when present, otherwise the payload itself (or
- * an empty object so callers can safely property-access the result).
+ * History and SSE both may wrap the ACP `update` object inside an envelope:
+ * `{ update: { ... }, _meta?: ..., sessionId?: ... }`.
+ * Merge the inner update with outer envelope fields so tool status in
+ * `_meta.updateParams` (and sessionId) survive into chat handlers.
+ * Returns an empty object for nullish input so property access is safe.
  */
 export function unwrap(payload: unknown): UnknownRecord {
   if (payload && typeof payload === 'object') {
-    const maybe = payload as MaybeUpdateWrapper;
-    if (maybe.update && typeof maybe.update === 'object') {
-      return maybe.update as UnknownRecord;
+    const outer = payload as MaybeUpdateWrapper & UnknownRecord;
+    if (outer.update && typeof outer.update === 'object') {
+      const inner = outer.update as UnknownRecord;
+      const out: UnknownRecord = { ...inner };
+      // Prefer outer _meta/sessionId (server envelope); keep inner if outer absent.
+      if (outer['_meta'] !== undefined) out['_meta'] = outer['_meta'];
+      else if (inner['_meta'] !== undefined) out['_meta'] = inner['_meta'];
+      if (outer['sessionId'] !== undefined) out['sessionId'] = outer['sessionId'];
+      else if (inner['sessionId'] !== undefined) out['sessionId'] = inner['sessionId'];
+      return out;
     }
-    return payload as UnknownRecord;
+    return outer as UnknownRecord;
   }
   return {};
 }
