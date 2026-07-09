@@ -59,6 +59,12 @@
       <button data-action="dismiss" type="button">Not now</button>
     </div>
 
+    <!-- Non-dismissable: only "Update now" reloads into the latest app shell. -->
+    <div id="app-update-banner" hidden role="alertdialog" aria-modal="true" aria-labelledby="app-update-banner-label">
+      <span data-role="label" id="app-update-banner-label">A new version of Grok Remote is ready.</span>
+      <button type="button" data-action="reload">Update now</button>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
