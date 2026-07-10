@@ -101,6 +101,8 @@ export class ChatView {
   _splitToggleBtn!: any;
   _toolsColFullscreen!: any;
   _toolsColTab!: any;
+  _toolsCloseBtn!: any;
+  _toolsSheetBackdrop!: any;
   _toolsFilesMounted!: any;
   _toolsTabBtns!: any;
   activeTurn!: any;
@@ -178,6 +180,8 @@ export class ChatView {
     this._toolsColTab = this._readToolsColTab();
     this._toolsColFullscreen = this._readToolsColFullscreen();
     this._toolsFilesMounted = false;
+    // Default collapsed so mobile never boots into the tools peek.
+    this._chatSplitCollapsed = true;
     this._buildToolsColHeader();
     this.composerEl = this.buildComposer();
     this.tabsEl    = this.buildTabs();
@@ -267,8 +271,9 @@ export class ChatView {
           this.bgTermsStripEl,
           this.convoSkillsStripEl,
           this.inFlightStripEl,
-          this.chatSplitEl = el('div', { class: 'chat-split' },
+          this.chatSplitEl = el('div', { class: 'chat-split chat-split--tools-collapsed' },
             this.streamEl,
+            this._toolsSheetBackdrop || null,
             this.toolsColEl,
           ),
           this.composerEl,
@@ -659,8 +664,10 @@ export class ChatView {
   // tab or a wide tools column from a previous agent.
   focusConversation() {
     this.switchTab('conversation');
-    if (!this._isChatMobile() && !this._chatSplitCollapsed) {
-      this._toggleToolsCol();
+    // Always land on messages + composer. On mobile that means force-close
+    // the tools sheet; on desktop collapse a leftover open tools column.
+    if (!this._chatSplitCollapsed) {
+      this._setToolsCollapsed(true);
     }
   }
 
@@ -1632,11 +1639,25 @@ export class ChatView {
     fullscreen.innerHTML = iconHtml(this._toolsColFullscreen ? 'minimize-2' : 'maximize-2');
     this._splitFullscreenBtn = fullscreen;
 
-    // The collapse-tools control lives on the topbar (right-hand panel
-    // icon) and is the single source of truth. We intentionally do NOT
-    // duplicate it in the column header. _splitToggleBtn is kept on the
-    // instance so other code paths that toggle its `hidden` state on
-    // mobile still work without a null check.
+    // Explicit close for mobile sheet (and a reliable target on desktop too).
+    // The old stacked layout left a dead zone that looked tappable but did nothing.
+    const closeBtn = el('button', {
+      type: 'button',
+      class: 'chat-tools-col__close',
+      title: 'close tools panel',
+      'aria-label': 'close tools panel',
+      onclick: (ev: MouseEvent) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._setToolsCollapsed(true);
+      },
+    }) as HTMLButtonElement;
+    closeBtn.innerHTML = iconHtml('x-circle');
+    this._toolsCloseBtn = closeBtn;
+
+    // The collapse-tools control also lives on the topbar (right-hand panel
+    // icon). _splitToggleBtn is kept on the instance so other code paths
+    // that toggle its `hidden` state still work without a null check.
     this._splitToggleBtn = null;
 
     const header = el('div', { class: 'chat-tools-col__head' },
@@ -1646,7 +1667,20 @@ export class ChatView {
       ),
       el('span', { class: 'chat-tools-col__spacer' }),
       fullscreen,
+      closeBtn,
     );
+
+    // Dimmed backdrop behind the mobile tools sheet — tap to close.
+    // Attached to chatSplitEl after the split host is constructed.
+    this._toolsSheetBackdrop = el('button', {
+      type: 'button',
+      class: 'chat-tools-sheet-backdrop',
+      'aria-label': 'close tools panel',
+      onclick: (ev: MouseEvent) => {
+        ev.preventDefault();
+        this._setToolsCollapsed(true);
+      },
+    }) as HTMLButtonElement;
 
     this.toolsColEl.replaceChildren(header, this.toolsStreamEl, this.toolsFilesPaneEl);
     this._applyToolsColTab();
@@ -1814,11 +1848,14 @@ export class ChatView {
 
   _initChatSplit() {
     if (this._chatSplit) return;
-    // Mobile: don't init Split.js. CSS stacks the tools column below the
-    // chat stream (see .chat-split @media block). Hide the in-header toggle
-    // since it has no meaning when the layout is stacked.
+    // Mobile: no Split.js. Tools open as a bottom sheet only when requested;
+    // default collapsed so conversation + composer own the screen.
     if (this._isChatMobile()) {
       if (this._splitToggleBtn) this._splitToggleBtn.hidden = true;
+      this._chatSplitCollapsed = true;
+      this._applyChatSplitCollapsedClass();
+      this._applyToolsFullscreenClass();
+      this._updateToolsToggleLabel();
       return;
     }
     if (this._splitToggleBtn) this._splitToggleBtn.hidden = false;
@@ -1837,11 +1874,11 @@ export class ChatView {
         snapOffset: 0,
         expandToMin: true,
         direction: 'horizontal',
-        elementStyle: (dim, size, gutterSize) => ({
+        elementStyle: (dim: string, size: number, gutterSize: number) => ({
           'flex-basis': `calc(${size}% - ${gutterSize}px)`,
         }),
-        gutterStyle: (dim, gutterSize) => ({ 'flex-basis': `${gutterSize}px` }),
-        onDragEnd: (next) => {
+        gutterStyle: (dim: string, gutterSize: number) => ({ 'flex-basis': `${gutterSize}px` }),
+        onDragEnd: (next: number[]) => {
           // Persist under the tab that is active at the moment of the
           // drag. Users get a remembered width per tab without any
           // explicit "save" step.
@@ -1887,19 +1924,42 @@ export class ChatView {
     this._splitToggleBtn.title = c ? 'expand tools panel' : 'collapse tools panel';
   }
 
-  _toggleToolsCol() {
-    // Mobile: stacked layout, no Split.js, no-op.
-    if (this._isChatMobile()) return;
-    const next = !this._chatSplitCollapsed;
+  _setToolsCollapsed(collapsed: boolean): void {
+    const next = !!collapsed;
+    if (this._chatSplitCollapsed === next) {
+      this._applyChatSplitCollapsedClass();
+      this._updateToolsToggleLabel();
+      return;
+    }
     this._chatSplitCollapsed = next;
-    try { localStorage.setItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-    if (next) {
+    // Only persist desktop preference; mobile always starts collapsed.
+    if (!this._isChatMobile()) {
+      try { localStorage.setItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    }
+    if (this._isChatMobile()) {
+      // Sheet mode: CSS handles show/hide via .chat-split--tools-collapsed.
+      // Unmount files when closing so the singleton isn't stuck in a hidden pane.
+      if (next && this._toolsFilesMounted) {
+        try { unmountFilesTab(); } catch { /* ignore */ }
+        this._toolsFilesMounted = false;
+      }
+    } else if (next) {
       this._destroyChatSplit();
     } else if (this._chatSplitBuild) {
       this._chatSplitBuild(this._chatSplitLastSizes);
     }
     this._applyChatSplitCollapsedClass();
     this._updateToolsToggleLabel();
+  }
+
+  _toggleToolsCol() {
+    this._setToolsCollapsed(!this._chatSplitCollapsed);
+  }
+
+  /** Open tools sheet on mobile (or expand desktop column) on a given tab. */
+  openToolsPanel(tab?: 'tools' | 'files'): void {
+    if (tab === 'tools' || tab === 'files') this._setToolsColTab(tab);
+    this._setToolsCollapsed(false);
   }
 
   _ensureToolsGroup(turn: any) {

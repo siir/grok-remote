@@ -428,16 +428,20 @@ function isSidebarCollapsed(): boolean {
 function installToolsToggle(): void {
   const btn = document.getElementById('topbar-sidebar-right') as HTMLElement | null;
   if (!btn) return;
-  if (isMobileViewport()) {
-    btn.hidden = true;
-    return;
-  }
+  // Shown on mobile too — tools/files are a sheet opened from this button,
+  // not a permanent peek under the composer.
   btn.hidden = false;
-  let collapsed = false;
+  let collapsed = true;
   function paint(): void {
-    btn!.innerHTML = iconHtml(collapsed ? 'panel-right-open' : 'panel-right-close');
-    btn!.title = collapsed ? 'show tool calls panel' : 'hide tool calls panel';
+    const mobile = isMobileViewport();
+    btn!.innerHTML = iconHtml(
+      mobile
+        ? (collapsed ? 'wrench' : 'x')
+        : (collapsed ? 'panel-right-open' : 'panel-right-close'),
+    );
+    btn!.title = collapsed ? 'show tools & files' : 'hide tools & files';
     btn!.setAttribute('aria-label', btn!.title);
+    btn!.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   }
   paint();
   btn.addEventListener('click', (ev) => {
@@ -449,6 +453,7 @@ function installToolsToggle(): void {
     collapsed = !!(ce && ce.detail && ce.detail.collapsed);
     paint();
   });
+  window.addEventListener('resize', () => paint());
 }
 
 function installOuterSplit(splitHost: HTMLElement, sidebarPane: HTMLElement, mainPane: HTMLElement): void {

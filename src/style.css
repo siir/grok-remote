@@ -1383,24 +1383,90 @@ body::before {
   letter-spacing: 0.04em;
 }
 
-/* Mobile: stack the tools column below the chat. Split.js doesn't
-   initialize at this breakpoint (see chat.js _isChatMobile), so any
-   inline flex-basis is overridden here to keep the stacked layout. */
+/* Mobile: conversation + composer own the screen. Tools/files open as a
+   bottom sheet only when the user asks (topbar button or sheet header).
+   Split.js is not initialized at this breakpoint (see chat.ts). */
 @media (max-width: 720px) {
   .chat-split {
     flex-direction: column;
+    position: relative;
   }
   .chat-split > .chat-stream {
     flex: 1 1 auto !important;
     min-width: 0;
+    min-height: 0;
   }
+  /* Hidden by default via .chat-split--tools-collapsed (display:none). */
   .chat-tools-col {
-    flex: 0 0 auto !important;
+    flex: none !important;
     border-left: none;
-    border-top: 1px solid var(--border);
-    /* Keep tools peek-height modest once the bottom nav is also on screen. */
-    max-height: 32vh;
   }
+  /* Open state: bottom sheet above bottom nav, not a permanent peek. */
+  .chat-split:not(.chat-split--tools-collapsed) > .chat-tools-col {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 46;
+    max-height: min(72dvh, 640px);
+    height: min(72dvh, 640px);
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border);
+    border-radius: 14px 14px 0 0;
+    background: var(--bg-soft);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.55);
+    /* Sit above the app bottom nav + home indicator. */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+  .chat-tools-sheet-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+  }
+  .chat-split:not(.chat-split--tools-collapsed) .chat-tools-sheet-backdrop {
+    display: block;
+  }
+  .chat-tools-col__close {
+    display: inline-flex !important;
+  }
+  .chat-tools-col__fullscreen {
+    display: none !important;
+  }
+  /* Topbar tools toggle is the primary open control on phones. */
+  .topbar-panel-btn--right {
+    display: inline-flex !important;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+.chat-tools-col__close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  cursor: pointer;
+}
+.chat-tools-col__close:hover {
+  color: var(--text);
+  border-color: var(--border-2);
+}
+.chat-tools-col__close svg {
+  width: 16px;
+  height: 16px;
 }
 
 .chat-empty {
@@ -4456,7 +4522,9 @@ body::before {
 .topbar-panel-btn:active,
 .topbar-icon-btn:active { transform: scale(0.92); }
 @media (max-width: 720px) {
-  .topbar-panel-btn { display: none !important; }
+  /* Left desktop-only panel control stays hidden; right tools toggle is
+     re-enabled in the mobile chat-tools block below. */
+  .topbar-panel-btn--left { display: none !important; }
 }
 .left-rail {
   background: var(--bg);
