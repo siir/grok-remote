@@ -9,7 +9,7 @@
 //   5. token-usage footer from prompt_complete
 //
 // Plus: available_commands_update, session_summary_generated,
-//       _x.ai/session_notification (toast), error (red banner).
+//       _x.ai/session_notification (rare friendly toast), error (red banner).
 
 import Split from 'split.js';
 import { api } from '../lib/api';
@@ -103,6 +103,7 @@ export class ChatView {
   _toolsColTab!: any;
   _toolsCloseBtn!: any;
   _toolsSheetBackdrop!: any;
+  _mobileSurfaceBackdrop!: any;
   _toolsFilesMounted!: any;
   _toolsTabBtns!: any;
   activeTurn!: any;
@@ -194,6 +195,7 @@ export class ChatView {
     this.traceMounted = false;
     this.flowPane = el('div', { class: 'pane pane--flow hidden' });
     this.flowMounted = false;
+    this._mobileSurfaceBackdrop = null;
 
     this.toastHost = el('div', { class: 'toast-host' });
 
@@ -348,6 +350,7 @@ export class ChatView {
       ChatView._toolsToggleWired = true;
     }
     ChatView._active = this;
+    document.addEventListener('keydown', this._onMobileSurfaceKey);
     // Initial state push so the topbar button paints correctly right after
     // mount, before any user toggle happens.
     document.dispatchEvent(new CustomEvent('grok-remote:tools-state', {
@@ -359,6 +362,8 @@ export class ChatView {
     this._destroyChatSplit();
     this.closeStream();
     this._cancelChatIntro();
+    this._clearMobileSurfaceClasses();
+    document.removeEventListener('keydown', this._onMobileSurfaceKey);
     if (this.filesMounted) {
       unmountFilesTab();
       this.filesMounted = false;
@@ -592,21 +597,181 @@ export class ChatView {
     }, 1200);
   }
 
+  /**
+   * Mobile surface model (conversation-first):
+   *   - conversation: primary full screen (composer + stream)
+   *   - info: light bottom sheet (informational)
+   *   - files / trace / flow: full-page dialogs (busy / multi-function)
+   * Desktop keeps the classic in-place tab swap.
+   */
+  _surfaceKind(key: string): 'primary' | 'sheet' | 'fullpage' {
+    if (key === 'conversation') return 'primary';
+    if (key === 'info') return 'sheet';
+    return 'fullpage'; // files, trace, flow
+  }
+
+  _surfaceTitle(key: string): string {
+    const titles: Record<string, string> = {
+      conversation: 'Conversation',
+      files: 'Files',
+      info: 'Info',
+      trace: 'Trace',
+      flow: 'Flow',
+    };
+    return titles[key] || key;
+  }
+
+  _paneForTab(key: string): HTMLElement | null {
+    if (key === 'files') return this.filesPane;
+    if (key === 'info') return this.infoPane;
+    if (key === 'trace') return this.tracePane;
+    if (key === 'flow') return this.flowPane;
+    return null;
+  }
+
+  /**
+   * Mount target for secondary pane content. On mobile overlays the chrome
+   * bar is a sibling of `.mobile-surface__body` so replaceChildren/mounts
+   * never wipe the back control.
+   */
+  _surfaceContentHost(pane: HTMLElement | null | undefined): HTMLElement | null {
+    if (!pane) return null;
+    const body = pane.querySelector(':scope > .mobile-surface__body') as HTMLElement | null;
+    return body || pane;
+  }
+
+  _ensureSurfaceChrome(pane: HTMLElement, key: string): void {
+    let body = pane.querySelector(':scope > .mobile-surface__body') as HTMLElement | null;
+    if (!body) {
+      body = el('div', { class: 'mobile-surface__body' }) as HTMLElement;
+      while (pane.firstChild) body.appendChild(pane.firstChild);
+      pane.appendChild(body);
+    }
+    const titleId = `mobile-surface-title-${key}`;
+    let bar = pane.querySelector(':scope > .mobile-surface__bar') as HTMLElement | null;
+    if (!bar) {
+      const kind = this._surfaceKind(key);
+      const titleEl = el('h2', {
+        class: 'mobile-surface__title',
+        id: titleId,
+      }, this._surfaceTitle(key)) as HTMLElement;
+      bar = el('header', {
+        class: 'mobile-surface__bar',
+        'aria-labelledby': titleId,
+      },
+        el('button', {
+          type: 'button',
+          class: 'mobile-surface__back',
+          'aria-label': 'back to conversation',
+          onclick: (ev: MouseEvent) => {
+            ev.preventDefault();
+            this.switchTab('conversation');
+          },
+        }, kind === 'sheet' ? 'Close' : '← Conversation'),
+        titleEl,
+        el('span', { class: 'mobile-surface__bar-spacer', 'aria-hidden': 'true' }),
+      ) as HTMLElement;
+      pane.setAttribute('role', 'dialog');
+      pane.setAttribute('aria-modal', 'true');
+      pane.setAttribute('aria-labelledby', titleId);
+      pane.insertBefore(bar, body);
+    } else {
+      const title = bar.querySelector('.mobile-surface__title');
+      if (title) {
+        title.textContent = this._surfaceTitle(key);
+        if (!title.id) title.id = titleId;
+      }
+    }
+  }
+
+  _ensureSurfaceBackdrop(): HTMLElement {
+    if (this._mobileSurfaceBackdrop) return this._mobileSurfaceBackdrop;
+    const bd = el('button', {
+      type: 'button',
+      class: 'mobile-surface-backdrop',
+      'aria-label': 'back to conversation',
+      onclick: (ev: MouseEvent) => {
+        ev.preventDefault();
+        this.switchTab('conversation');
+      },
+    }) as HTMLElement;
+    this._mobileSurfaceBackdrop = bd;
+    const host = this.root?.querySelector?.('.chat-body') || this.root;
+    if (host) host.appendChild(bd);
+    return bd;
+  }
+
+  _clearMobileSurfaceClasses(): void {
+    for (const pane of [this.filesPane, this.infoPane, this.tracePane, this.flowPane]) {
+      if (!pane) continue;
+      pane.classList.remove('mobile-surface', 'mobile-surface--sheet', 'mobile-surface--fullpage');
+    }
+    document.body.classList.remove('mobile-surface-open');
+    if (this._mobileSurfaceBackdrop) {
+      this._mobileSurfaceBackdrop.classList.remove('mobile-surface-backdrop--visible');
+    }
+  }
+
+  _onMobileSurfaceKey = (ev: KeyboardEvent): void => {
+    if (ev.key !== 'Escape') return;
+    if (!this._isChatMobile()) return;
+    if (this.tabsState === 'conversation') return;
+    // Don't steal Escape from nested modals/viewers if any take focus later.
+    ev.preventDefault();
+    this.switchTab('conversation');
+  };
+
   switchTab(key: any) {
     this.tabsState = key;
     for (const [k, btn] of Object.entries(this.tabBtns)) {
       (btn as any).classList.toggle('tab--active', k === key);
     }
-    const convo = this.root.querySelector('.pane--conversation');
-    if (convo) convo.classList.toggle('hidden', key !== 'conversation');
-    this.filesPane.classList.toggle('hidden', key !== 'files');
-    this.infoPane.classList.toggle('hidden', key !== 'info');
-    this.tracePane.classList.toggle('hidden', key !== 'trace');
-    this.flowPane.classList.toggle('hidden', key !== 'flow');
+
+    const mobile = this._isChatMobile();
+    const convo = this.root.querySelector('.pane--conversation') as HTMLElement | null;
+    const kind = this._surfaceKind(key);
+
+    // Leaving conversation on mobile: keep stream mounted underneath so
+    // returning is instant; overlay the secondary surface.
+    if (mobile && kind !== 'primary') {
+      if (convo) convo.classList.remove('hidden');
+      this._clearMobileSurfaceClasses();
+      // Hide other secondary panes first.
+      this.filesPane.classList.add('hidden');
+      this.infoPane.classList.add('hidden');
+      this.tracePane.classList.add('hidden');
+      this.flowPane.classList.add('hidden');
+
+      const pane = this._paneForTab(key);
+      if (pane) {
+        this._ensureSurfaceChrome(pane, key);
+        pane.classList.add('mobile-surface');
+        pane.classList.add(kind === 'sheet' ? 'mobile-surface--sheet' : 'mobile-surface--fullpage');
+        pane.classList.remove('hidden');
+        document.body.classList.add('mobile-surface-open');
+        // Sheets get a dimmed backdrop (tap to return). Full-page owns
+        // the screen and uses the bar back control only.
+        if (kind === 'sheet') {
+          const bd = this._ensureSurfaceBackdrop();
+          bd.classList.add('mobile-surface-backdrop--visible');
+        }
+      }
+      // Tools sheet should not compete with a secondary surface.
+      if (!this._chatSplitCollapsed) this._setToolsCollapsed(true);
+    } else {
+      // Desktop (or back to conversation on mobile): classic swap.
+      this._clearMobileSurfaceClasses();
+      if (convo) convo.classList.toggle('hidden', key !== 'conversation');
+      this.filesPane.classList.toggle('hidden', key !== 'files');
+      this.infoPane.classList.toggle('hidden', key !== 'info');
+      this.tracePane.classList.toggle('hidden', key !== 'trace');
+      this.flowPane.classList.toggle('hidden', key !== 'flow');
+    }
 
     if (key === 'files') {
+      const host = this._surfaceContentHost(this.filesPane)!;
       if (this.agentId) {
-        mountFilesTab(this.filesPane, { id: this.agentId });
+        mountFilesTab(host, { id: this.agentId });
         this.filesMounted = true;
         // The Files singleton just moved into the top-bar pane; clear the
         // tools-column's stale shell so it doesn't look duplicated.
@@ -615,9 +780,9 @@ export class ChatView {
           if (this.toolsFilesPaneEl) this.toolsFilesPaneEl.replaceChildren();
         }
       } else if (!this.filesMounted) {
-        this.filesPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+        host.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       }
-    } else if (this.filesMounted) {
+    } else if (this.filesMounted && key !== 'files') {
       unmountFilesTab();
       this.filesMounted = false;
     }
@@ -625,13 +790,14 @@ export class ChatView {
     // Trace tab: always re-fetch and re-render on every open. The mount
     // function unmounts any prior trace state first, so this is safe.
     if (key === 'trace') {
+      const host = this._surfaceContentHost(this.tracePane)!;
       if (this.agentId) {
-        mountTraceTab(this.tracePane, this.currentAgent || { id: this.agentId });
+        mountTraceTab(host, this.currentAgent || { id: this.agentId });
         this.traceMounted = true;
       } else {
-        this.tracePane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+        host.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       }
-    } else if (this.traceMounted) {
+    } else if (this.traceMounted && key !== 'trace') {
       unmountTraceTab();
       this.traceMounted = false;
     }
@@ -640,13 +806,14 @@ export class ChatView {
     // the same ReactFlow component as the global #/flow page but with a
     // filterIds prop so only this agent's node + tool-call satellites show.
     if (key === 'flow') {
+      const host = this._surfaceContentHost(this.flowPane)!;
       if (this.agentId) {
-        mountFlowTab(this.flowPane, [this.agentId]);
+        mountFlowTab(host, [this.agentId]);
         this.flowMounted = true;
       } else {
-        this.flowPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+        host.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       }
-    } else if (this.flowMounted) {
+    } else if (this.flowMounted && key !== 'flow') {
       unmountFlowTab();
       this.flowMounted = false;
     }
@@ -664,11 +831,12 @@ export class ChatView {
   // tab or a wide tools column from a previous agent.
   focusConversation() {
     this.switchTab('conversation');
-    // Always land on messages + composer. On mobile that means force-close
-    // the tools sheet; on desktop collapse a leftover open tools column.
+    // Always land on messages + composer. Close tools sheet and any
+    // mobile surface overlays so conversation is the only center stage.
     if (!this._chatSplitCollapsed) {
       this._setToolsCollapsed(true);
     }
+    this._clearMobileSurfaceClasses();
   }
 
   // Back-compat alias for older call sites. New code should use
@@ -968,20 +1136,24 @@ export class ChatView {
     if (this.traceMounted) {
       unmountTraceTab();
       this.traceMounted = false;
-      this.tracePane.replaceChildren();
+      const th = this._surfaceContentHost(this.tracePane);
+      if (th) th.replaceChildren();
     }
     if (this.flowMounted) {
       unmountFlowTab();
       this.flowMounted = false;
-      this.flowPane.replaceChildren();
+      const fh = this._surfaceContentHost(this.flowPane);
+      if (fh) fh.replaceChildren();
     }
 
     if (!agent || !agent.id) {
       this.agentId = null;
       this.currentAgent = null;
       this.streamEl.appendChild(this.empty);
-      this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
-      this.filesPane.replaceChildren();
+      const infoHost = this._surfaceContentHost(this.infoPane) || this.infoPane;
+      infoHost.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+      const filesHost = this._surfaceContentHost(this.filesPane) || this.filesPane;
+      filesHost.replaceChildren();
       if (this.toolsFilesPaneEl && this._toolsColTab === 'files') {
         this.toolsFilesPaneEl.replaceChildren(
           el('div', { class: 'pane-empty' }, 'no agent selected'),
@@ -995,6 +1167,10 @@ export class ChatView {
       if (this.tokensPill)  this.tokensPill.hidden = true;
       if (this.inflightPill) this.inflightPill.hidden = true;
       this.closeSettingsDrawer();
+      // Empty shell is conversation-first: never leave tools open (desktop).
+      this.switchTab('conversation');
+      if (!this._chatSplitCollapsed) this._setToolsCollapsed(true);
+      this._clearMobileSurfaceClasses();
       return;
     }
     if (this.starBtn)     this.starBtn.hidden = false;
@@ -1022,7 +1198,8 @@ export class ChatView {
     this._syncStarBtn();
 
     if (this.tabsState === 'files') {
-      mountFilesTab(this.filesPane, { id: this.agentId });
+      const host = this._surfaceContentHost(this.filesPane) || this.filesPane;
+      mountFilesTab(host, { id: this.agentId });
       this.filesMounted = true;
     }
 
@@ -1101,8 +1278,9 @@ export class ChatView {
   }
 
   renderInfo(agent: any) {
+    const host = this._surfaceContentHost(this.infoPane) || this.infoPane;
     if (!agent) {
-      this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
+      host.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       return;
     }
     const sessionId = agent.sessionId || null;
@@ -1185,7 +1363,7 @@ export class ChatView {
 
     const publishSection = this._buildPublishSection(sessionId);
 
-    this.infoPane.replaceChildren(grid, resume, publishSection);
+    host.replaceChildren(grid, resume, publishSection);
   }
 
   // Wraps `grok share <sessionId>` via POST /api/agents/:id/publish. The
@@ -2417,7 +2595,7 @@ export class ChatView {
       case 'prompt_result':             return this.onPromptComplete(data);
       case 'agent_status':              return this.onAgentStatus(data);
       case 'session_notification':
-      case 'x.ai/session_notification': return this.onSessionNotification(data);
+      case 'x.ai/session_notification': return this.onSessionNotification(data, opts);
       case 'error':                     return this.onError(data);
       default: return;
     }
@@ -2732,9 +2910,63 @@ export class ChatView {
     }
   }
 
-  onSessionNotification(data: any) {
-    const text = (data && (data.message || data.text)) || JSON.stringify(data).slice(0, 200);
-    this.showToast(text, 'info');
+  /**
+   * Grok emits `_x.ai/session_notification` for both human-facing notes and
+   * structural updates (model_changed, tool_call_delta_chunk, …). The old
+   * path stringified the whole envelope as a toast — on refresh/reconnect
+   * that flooded the UI with raw JSON. Only surface real user-facing text
+   * or a short friendly line for model changes; silence the rest.
+   */
+  onSessionNotification(data: any, opts?: any) {
+    if (this._isReplaying || (opts && opts.fromHistory)) return;
+
+    // Envelope shapes we see on the wire:
+    //   { method, params: { sessionId, update: { sessionUpdate, ... } } }
+    //   { update: { sessionUpdate, ... } }
+    //   { message | text }
+    const params = data && data.params && typeof data.params === 'object' ? data.params : null;
+    const update = (params && params.update && typeof params.update === 'object')
+      ? params.update
+      : (data && data.update && typeof data.update === 'object')
+        ? data.update
+        : data;
+    const kind = (update && (update.sessionUpdate || update.kind || update.type)) || null;
+
+    // Streaming / structural events already handled via session/update SSE
+    // names — never toast (and never dump JSON).
+    const SILENT = new Set([
+      'tool_call', 'tool_call_update', 'tool_call_delta_chunk',
+      'tool_call_start', 'tool_call_end',
+      'agent_message_chunk', 'agent_thought_chunk',
+      'user_message_chunk', 'user_message',
+      'available_commands_update', 'prompt_complete', 'prompt_result',
+      'task_backgrounded', 'task_completed',
+      'session_summary_generated',
+    ]);
+    if (kind && SILENT.has(String(kind))) return;
+
+    if (kind === 'model_changed' || kind === 'model_change') {
+      const model = update.model_id || update.modelId || update.model || '';
+      const effort = update.reasoning_effort || update.reasoningEffort || '';
+      const parts = [
+        model ? `model → ${model}` : '',
+        effort ? `effort ${effort}` : '',
+      ].filter(Boolean);
+      if (parts.length) this.showToast(parts.join(' · '), 'info');
+      return;
+    }
+
+    const text = (typeof (data && data.message) === 'string' && data.message)
+      || (typeof (data && data.text) === 'string' && data.text)
+      || (params && typeof params.message === 'string' && params.message)
+      || (params && typeof params.text === 'string' && params.text)
+      || (update && typeof update.message === 'string' && update.message)
+      || (update && typeof update.text === 'string' && update.text)
+      || null;
+    if (typeof text === 'string' && text.trim()) {
+      this.showToast(text.trim().slice(0, 200), 'info');
+    }
+    // Unknown structured payloads: stay quiet (no JSON dumps).
   }
 
   onError(data: any) {

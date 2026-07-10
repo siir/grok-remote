@@ -25,6 +25,10 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
+  /* Tell the browser this is a dark UI so native scrollbars / form
+     controls don't paint a light system track (the "white bar" on macOS
+     when the OS is in light mode). Per-theme overrides below. */
+  color-scheme: dark;
   font-family: var(--mono);
   font-size: 14px;
   line-height: 1.5;
@@ -1383,9 +1387,12 @@ body::before {
   letter-spacing: 0.04em;
 }
 
-/* Mobile: conversation + composer own the screen. Tools/files open as a
-   bottom sheet only when the user asks (topbar button or sheet header).
-   Split.js is not initialized at this breakpoint (see chat.ts). */
+/* Mobile conversation-first surface model
+   ─────────────────────────────────────────
+   Primary: conversation stream + composer (always under everything).
+   Sheet:   light / informational (Info, tools/files wrench panel).
+   Fullpage: busy multi-function (Files tab, Trace, Flow).
+   Split.js is not used at this breakpoint (see chat.ts). */
 @media (max-width: 720px) {
   .chat-split {
     flex-direction: column;
@@ -1445,6 +1452,104 @@ body::before {
     min-width: 44px;
     min-height: 44px;
   }
+
+  /* Secondary tabs → overlay surfaces (conversation stays mounted). */
+  .pane.mobile-surface {
+    position: fixed;
+    z-index: 48;
+    background: var(--bg);
+    display: flex !important;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .pane.mobile-surface--fullpage {
+    inset: 0;
+    /* Leave bottom nav visible for global routes; surface has its own back. */
+    bottom: calc(52px + env(safe-area-inset-bottom));
+    top: 0;
+    padding-top: env(safe-area-inset-top);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+  .pane.mobile-surface--sheet {
+    left: 0;
+    right: 0;
+    bottom: calc(52px + env(safe-area-inset-bottom));
+    top: auto;
+    /* Shorter than fullpage so conversation peeks behind (siir/grok-remote#8). */
+    max-height: min(52dvh, 420px);
+    border-top: 1px solid var(--border);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.55);
+  }
+  .mobile-surface-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 47;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+  }
+  .mobile-surface-backdrop.mobile-surface-backdrop--visible {
+    display: block;
+  }
+  .mobile-surface__bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-soft);
+  }
+  .mobile-surface__back {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--teal);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    min-height: 44px;
+  }
+  .mobile-surface__back:hover {
+    border-color: var(--teal);
+    background: rgba(94, 234, 212, 0.08);
+  }
+  .mobile-surface__title {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.04em;
+    margin: 0;
+    padding: 0;
+  }
+  .mobile-surface__bar-spacer { flex: 1; }
+  /* Body under the surface chrome should scroll / fill. */
+  .pane.mobile-surface > .mobile-surface__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  /* Dim page chrome slightly when a sheet/fullpage is open. */
+  body.mobile-surface-open .left-rail {
+    pointer-events: none;
+    opacity: 0.45;
+  }
+}
+
+/* Surface chrome only used on mobile; keep inert on desktop. */
+.mobile-surface__bar { display: none; }
+.mobile-surface-backdrop { display: none; }
+@media (max-width: 720px) {
+  .mobile-surface__bar { display: flex; }
 }
 .chat-tools-col__close {
   display: none;
@@ -3368,18 +3473,20 @@ body::before {
   }
   .chat-empty-btn { width: 100%; min-height: 48px; }
 
-  /* Install banner on mobile: stays at the TOP (sliding down from
-     the safe-area inset), full-width with small side margins, clearly
-     reads as an alert, not blended with the topbar. */
+  /* Install banner on mobile: dock ABOVE the bottom nav, not over the
+     chat tab strip / top chrome. Top placement was intercepting Info/Files
+     taps (siir/grok-remote#7). */
   #install-banner {
-    top: calc(8px + env(safe-area-inset-top));
-    bottom: auto;
+    top: auto;
+    bottom: calc(60px + env(safe-area-inset-bottom));
     left: 12px;
     right: 12px;
     transform: none;
     flex-wrap: wrap;
     justify-content: flex-end;
     font-size: 14px;
+    /* Below mobile surfaces (48) and tools sheet (46); above bottom nav. */
+    z-index: 40;
   }
   #install-banner [data-role="label"] {
     flex: 1 1 100%;
@@ -3387,8 +3494,8 @@ body::before {
     font-size: 14px;
   }
   @keyframes install-banner-in {
-    from { opacity: 0; transform: translateY(-12px); }
-    to   { opacity: 1; transform: translateY(0);     }
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0);   }
   }
 }
 
@@ -3444,6 +3551,7 @@ body::before {
 
 /* light: warm off-white, darker teal/blue for legibility. */
 [data-theme="light"] {
+  color-scheme: light;
   --bg:        #fafafa;
   --bg-soft:   #ffffff;
   --panel:     #f3f4f6;

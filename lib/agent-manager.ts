@@ -10,6 +10,7 @@ import { AcpClient, type AcpClientSettings } from './acp-client.js';
 import { ensureAgentDirs, agentDir, historyPath, append as historyAppend } from './history.js';
 import { createRing, type SseRing, type SseRingEntry } from './sse.js';
 import { assertCwdAllowed } from './security.js';
+import { resolveWorktreeCwd } from './git-worktree.js';
 
 const SSE_RING_LIMIT = 200;
 const AGENTS_ROOT = path.join(os.homedir(), '.grok-remote', 'agents');
@@ -761,11 +762,29 @@ export class AgentManager extends EventEmitter {
     let workCwd: string;
     if (cwd != null && String(cwd).trim()) {
       // Jail under $HOME (or GROK_REMOTE_JAIL). Fleet REPO_DIR under home is ok.
-      workCwd = assertCwdAllowed(String(cwd).trim());
+      // Expand ~/… (settings defaultCwd is often "~/" or "~/…").
+      let raw = String(cwd).trim();
+      if (raw === '~') raw = os.homedir();
+      else if (raw.startsWith('~/') || raw.startsWith('~' + path.sep)) {
+        raw = path.join(os.homedir(), raw.slice(2));
+      }
+      workCwd = assertCwdAllowed(raw);
     } else {
       workCwd = path.join(dir, 'cwd');
     }
     fs.mkdirSync(workCwd, { recursive: true });
+
+    // Materialize git worktree when requested. `grok agent stdio` ignores -w,
+    // so we create a real worktree and point the agent cwd at it. The label
+    // stays on record.settings for UI; connect strips it from the client argv.
+    const baseSettings = settings && typeof settings === 'object' ? { ...settings } : null;
+    if (baseSettings && (baseSettings.worktree === true || typeof baseSettings.worktree === 'string')) {
+      const wtCwd = resolveWorktreeCwd(workCwd, baseSettings.worktree);
+      if (wtCwd) {
+        workCwd = assertCwdAllowed(wtCwd);
+        fs.mkdirSync(workCwd, { recursive: true });
+      }
+    }
 
     const ring = createRing<AgentRingEntry>(SSE_RING_LIMIT);
     const record: AgentRecord = {
@@ -781,7 +800,8 @@ export class AgentManager extends EventEmitter {
       starred: false,
       archived: false,
       archivedAt: null,
-      settings: settings && typeof settings === 'object' ? settings : null,
+      // Keep original settings (incl. worktree label) on disk / UI.
+      settings: baseSettings,
       client: null,
       ring,
       status: 'starting',
@@ -805,10 +825,13 @@ export class AgentManager extends EventEmitter {
   private _connectRecord(record: AgentRecord): AcpClient {
     if (record.client) return record.client;
     record.status = 'starting';
+    // Worktree was already applied as cwd at spawn; do not pass -w again.
+    const clientSettings = record.settings ? { ...record.settings } : null;
+    if (clientSettings && 'worktree' in clientSettings) delete clientSettings.worktree;
     const client = new AcpClient({
       cwd: record.cwd,
       modelHint: record.modelHint,
-      settings: record.settings || null,
+      settings: clientSettings,
     });
     record.client = client;
     this._wireClient(record);

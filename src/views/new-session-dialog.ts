@@ -193,11 +193,11 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
     const worktreeInput = el('input', {
       class: 'sd-input',
       type: 'text',
-      placeholder: 'existing worktree path or name (advanced)',
+      placeholder: '/path/to/existing/worktree  (or a new name to create)',
     }) as HTMLInputElement;
 
-    // Optional: create a fresh git worktree with a random three-word slug
-    // (passed to grok as `-w <name>` so the main checkout stays clean).
+    // Create a real git worktree under ~/.grok/worktrees/<repo>/<name> and
+    // run the agent with that as cwd. (grok agent stdio ignores -w.)
     const createWorktreeCb = el('input', {
       class: 'sd-checkbox',
       type: 'checkbox',
@@ -226,7 +226,7 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
       createWorktreeCb,
       el('span', { class: 'sd-toggle-text' }, 'create worktree'),
       el('span', { class: 'sd-toggle-hint' },
-        'isolated checkout with a random 3-word name: ',
+        'isolated git checkout (requires Folder = a git repo). name: ',
         worktreeNameEl,
         worktreeRegenBtn,
       ),
@@ -260,8 +260,8 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
         el('div', { class: 'sd-section-title' }, 'Environment'),
         el('div', { class: 'sd-grid' },
           field('Sandbox profile', sandboxInput, 'sandbox profile name.'),
-          field('Worktree path', worktreeInput,
-            'use an existing worktree. ignored when “create worktree” is checked.'),
+          field('Worktree path or name', worktreeInput,
+            'absolute path → use that checkout as cwd. name → create under ~/.grok/worktrees. ignored when “create worktree” is checked.'),
         ),
       ),
     ) as HTMLElement;
@@ -488,9 +488,24 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
       type: 'button',
     }, 'cancel') as HTMLButtonElement;
 
+    function isVagueHomeCwd(p: string | undefined): boolean {
+      const t = (p || '').trim();
+      return !t || t === '~' || t === '~/' || t === '~/.' ;
+    }
+
     createBtn.addEventListener('click', () => {
       errEl.hidden = true;
       const body = collect();
+      // Creating a worktree needs a real git repo as the source Folder.
+      // `~/` alone is never a useful git root (siir/grok-remote#10).
+      if (body.settings?.worktree && isVagueHomeCwd(body.cwd)) {
+        errEl.textContent = 'set Folder to a git repository before creating a worktree (not ~/ alone)';
+        errEl.hidden = false;
+        return;
+      }
+      // Don't send bare ~ as cwd (server would treat it as a relative path).
+      if (isVagueHomeCwd(body.cwd)) delete body.cwd;
+      // Don't persist bare ~ as a "recent" path.
       if (body.cwd) rememberCwd(body.cwd);
       finish(body);
     });
@@ -579,12 +594,31 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
       try {
         defaults = await api.getSettings() as AppSettings;
       } catch { /* ignore */ }
-      if (defaults.defaultCwd) cwdInput.value = defaults.defaultCwd;
+
+      // Prefer a remembered project path over bare ~/ so create-worktree
+      // has a plausible git root. Leave blank if all we have is home.
+      const isVagueHome = (p: string | undefined | null): boolean => {
+        const t = (p || '').trim();
+        return !t || t === '~' || t === '~/' || t === '~/.' ;
+      };
+      const recent = loadRecentCwds();
+      const preferred =
+        recent.find((c) => !isVagueHome(c)) ||
+        (!isVagueHome(defaults.defaultCwd) ? String(defaults.defaultCwd) : '') ||
+        '';
+      if (preferred) cwdInput.value = preferred;
+      else cwdInput.value = '';
+      cwdInput.placeholder = preferred
+        ? 'leave blank for default sandbox cwd'
+        : 'pick a git repo (browse) — needed for create worktree';
+
       if (defaults.defaultModel) modelInput.value = defaults.defaultModel;
       if (typeof defaults.autoApprove === 'boolean') {
         alwaysApprove.checked = defaults.autoApprove;
       }
-      paintRecent(defaults.defaultCwd ? [defaults.defaultCwd] : []);
+      paintRecent(
+        [preferred, defaults.defaultCwd || '', ...recent].filter(Boolean) as string[],
+      );
 
       try {
         const models = await api.systemModels.get() as { items?: Array<{ id?: string }> };
@@ -598,7 +632,7 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
       } catch { /* leave empty */ }
 
       cwdInput.focus();
-      cwdInput.select();
+      if (cwdInput.value) cwdInput.select();
     })();
   });
 }

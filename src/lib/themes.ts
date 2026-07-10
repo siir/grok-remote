@@ -128,10 +128,16 @@ export function setTheme(name: string): string {
   return n;
 }
 
+/** Themes that should use the light system color-scheme (native scrollbars). */
+const LIGHT_SCHEMES = new Set(['light', 'unicorn']);
+
 export function applyTheme(name: string): string {
   const n = isValid(name) ? name : DEFAULT_THEME;
   if (typeof document !== 'undefined' && document.documentElement) {
     document.documentElement.dataset.theme = n;
+    // Keep native scrollbars/form controls in sync with the page palette
+    // (avoids a light macOS scrollbar strip on dark themes).
+    document.documentElement.style.colorScheme = LIGHT_SCHEMES.has(n) ? 'light' : 'dark';
     // Browser titlebar / PWA window chrome follows the active theme.
     const meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null;
     if (meta) meta.content = getThemeMeta(n).chrome;
