@@ -35,11 +35,13 @@ import {
   type UpdateStepEvent,
 } from './lib/version-update.js';
 import { browseDirectory } from './lib/fs-browse.js';
+import { listRepoWorktrees } from './lib/git-worktree.js';
 import {
   authorizeRequest,
   authorizeAdmin,
   authToken,
   jailRoot,
+  clampBrowsePath,
 } from './lib/security.js';
 import { bootStartStatus, setBootStart } from './lib/boot-autostart.js';
 
@@ -310,6 +312,27 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: string,
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       sendJson(res, 500, { ok: false, error: msg });
+    }
+    return;
+  }
+
+  // Git worktrees for the repo at path — new-session "existing worktree" chips.
+  if (url === '/api/fs/worktrees' && method === 'GET') {
+    try {
+      const full = req.url || '';
+      const qIdx = full.indexOf('?');
+      const qs = qIdx >= 0 ? new URLSearchParams(full.slice(qIdx + 1)) : new URLSearchParams();
+      const rawPath = qs.get('path') || qs.get('cwd') || '';
+      const { path: clamped, error } = clampBrowsePath(rawPath);
+      if (error) {
+        sendJson(res, 200, { ok: false, path: clamped, worktrees: [], error });
+        return;
+      }
+      const worktrees = listRepoWorktrees(clamped);
+      sendJson(res, 200, { ok: true, path: clamped, worktrees });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sendJson(res, 500, { ok: false, error: msg, worktrees: [] });
     }
     return;
   }

@@ -10,6 +10,7 @@ import {
   ensureNamedWorktree,
   resolveWorktreeCwd,
   worktreeDestPath,
+  listRepoWorktrees,
 } from '../lib/git-worktree.js';
 
 function mkGitRepo(): string {
@@ -67,4 +68,25 @@ test('resolveWorktreeCwd creates from name', () => {
 test('ensureNamedWorktree rejects non-git source', () => {
   const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'gr-wt-nogit-'));
   assert.throws(() => ensureNamedWorktree(bare, 'x'), /git repository/);
+});
+
+test('listRepoWorktrees includes main and linked worktrees', () => {
+  const repo = mkGitRepo();
+  const name = `list-${Date.now().toString(36)}`;
+  const dest = ensureNamedWorktree(repo, name);
+  const list = listRepoWorktrees(repo);
+  assert.ok(list.length >= 2);
+  const real = (p: string) => {
+    try { return fs.realpathSync(path.resolve(p)); } catch { return path.resolve(p); }
+  };
+  assert.ok(list.some((w) => w.isMain && real(w.path) === real(repo)));
+  assert.ok(list.some((w) => real(w.path) === real(dest) && !w.isMain));
+  try {
+    execFileSync('git', ['-C', repo, 'worktree', 'remove', '--force', dest], { stdio: 'ignore' });
+  } catch { /* ignore */ }
+});
+
+test('listRepoWorktrees returns empty for non-git', () => {
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'gr-wt-list-'));
+  assert.deepEqual(listRepoWorktrees(bare), []);
 });

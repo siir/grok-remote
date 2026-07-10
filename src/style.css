@@ -7737,6 +7737,53 @@ body::before {
 }
 .nsd-error[hidden] { display: none; }
 
+.nsd-worktree-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.nsd-worktree-picker[hidden] { display: none; }
+.nsd-worktree-picker-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  width: 100%;
+  margin-bottom: 2px;
+}
+.nsd-worktree-picker-status {
+  font-size: 11px;
+  color: var(--muted);
+}
+.nsd-worktree-picker-status--err { color: var(--red); }
+.nsd-worktree-chip {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nsd-worktree-chip:hover {
+  color: var(--teal);
+  border-color: rgba(94, 234, 212, 0.45);
+}
+.nsd-worktree-chip--active {
+  color: var(--teal);
+  border-color: var(--teal);
+  background: rgba(94, 234, 212, 0.08);
+}
+.nsd-worktree-chip--main {
+  border-style: dashed;
+}
 .nsd-worktree-toggle {
   margin-top: 4px;
   flex-wrap: wrap;

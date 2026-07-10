@@ -232,6 +232,89 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
       ),
     ) as HTMLElement;
 
+    // Existing worktrees for the Folder repo (chips). Click → set cwd, clear create.
+    const worktreePickerHost = el('div', {
+      class: 'nsd-worktree-picker',
+      hidden: '',
+    }) as HTMLElement;
+
+    interface WtChip {
+      path: string;
+      branch?: string | null;
+      label?: string;
+      isMain?: boolean;
+    }
+
+    let wtLoadGen = 0;
+    async function refreshWorktreePicker(forPath?: string): Promise<void> {
+      const gen = ++wtLoadGen;
+      const src = (forPath ?? cwdInput.value).trim();
+      if (!src || src === '~' || src === '~/') {
+        worktreePickerHost.hidden = true;
+        worktreePickerHost.replaceChildren();
+        return;
+      }
+      worktreePickerHost.hidden = false;
+      worktreePickerHost.replaceChildren(
+        el('div', { class: 'nsd-worktree-picker-label' }, 'worktrees'),
+        el('span', { class: 'nsd-worktree-picker-status' }, 'loading…'),
+      );
+      try {
+        const res = await api.fs.worktrees(src) as {
+          ok?: boolean;
+          worktrees?: WtChip[];
+          error?: string;
+        };
+        if (gen !== wtLoadGen) return;
+        const list = Array.isArray(res?.worktrees) ? res.worktrees : [];
+        // Prefer linked worktrees first; still show main.
+        const linked = list.filter((w) => !w.isMain);
+        const main = list.filter((w) => w.isMain);
+        const ordered = [...linked, ...main];
+        if (!ordered.length) {
+          worktreePickerHost.replaceChildren(
+            el('div', { class: 'nsd-worktree-picker-label' }, 'worktrees'),
+            el('span', { class: 'nsd-worktree-picker-status' }, 'none yet — use create worktree'),
+          );
+          return;
+        }
+        const current = cwdInput.value.trim();
+        worktreePickerHost.replaceChildren(
+          el('div', { class: 'nsd-worktree-picker-label' }, 'existing worktrees'),
+          ...ordered.map((w) => {
+            const label = w.label || (w.branch ? `${pathBase(w.path)} · ${w.branch}` : pathBase(w.path));
+            const btn = el('button', {
+              class: `nsd-worktree-chip${w.path === current ? ' nsd-worktree-chip--active' : ''}${w.isMain ? ' nsd-worktree-chip--main' : ''}`,
+              type: 'button',
+              title: w.path,
+            }, label) as HTMLButtonElement;
+            btn.addEventListener('click', () => {
+              // Select existing: set Folder to that checkout; do not create.
+              createWorktreeCb.checked = false;
+              paintWorktreeName();
+              worktreeInput.value = '';
+              cwdInput.value = w.path;
+              if (browseOpen) void loadBrowse(w.path);
+              void refreshWorktreePicker(w.path);
+            });
+            return btn;
+          }),
+        );
+      } catch (err) {
+        if (gen !== wtLoadGen) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        worktreePickerHost.replaceChildren(
+          el('div', { class: 'nsd-worktree-picker-label' }, 'worktrees'),
+          el('span', { class: 'nsd-worktree-picker-status nsd-worktree-picker-status--err' }, msg),
+        );
+      }
+    }
+
+    function pathBase(p: string): string {
+      const parts = p.replace(/\/+$/, '').split(/[/\\]/);
+      return parts[parts.length - 1] || p;
+    }
+
     const modelList = el('datalist', { id: 'nsd-model-list' }) as HTMLDataListElement;
     const errEl = el('div', { class: 'nsd-error', hidden: '' }) as HTMLElement;
 
@@ -354,9 +437,11 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
           btn.addEventListener('click', () => {
             cwdInput.value = ent.path;
             void loadBrowse(ent.path);
+            void refreshWorktreePicker(ent.path);
           });
           return btn;
         }));
+        void refreshWorktreePicker(browsePath);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         folderStatus.textContent = msg;
@@ -392,6 +477,7 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
       if (browsePath) cwdInput.value = browsePath;
       setBrowseOpen(false);
       cwdInput.focus();
+      void refreshWorktreePicker(cwdInput.value);
     });
     useHomeBtn.addEventListener('click', () => {
       void (async () => {
@@ -401,10 +487,13 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
             cwdInput.value = data.home;
             homePath = data.home;
             if (browseOpen) void loadBrowse(data.home);
+            void refreshWorktreePicker(data.home);
           }
         } catch { /* ignore */ }
       })();
     });
+    cwdInput.addEventListener('change', () => { void refreshWorktreePicker(); });
+    cwdInput.addEventListener('blur', () => { void refreshWorktreePicker(); });
 
     // ── recent cwds ─────────────────────────────────────────────────────
     function paintRecent(extra: string[] = []): void {
@@ -434,6 +523,7 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
           btn.addEventListener('click', () => {
             cwdInput.value = c;
             if (browseOpen) void loadBrowse(c);
+            void refreshWorktreePicker(c);
           });
           return btn;
         }),
@@ -523,6 +613,7 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
         field('Folder', cwdRow as unknown as HTMLElement,
           'Where the agent runs. Blank uses Settings → default cwd, or a private sandbox. Prefer a separate worktree when editing grok-remote itself.'),
         worktreeToggle,
+        worktreePickerHost,
         recentHost,
         folderPanel,
       ),
@@ -619,6 +710,7 @@ export function openNewSessionDialog(): Promise<NewSessionResult | null> {
       paintRecent(
         [preferred, defaults.defaultCwd || '', ...recent].filter(Boolean) as string[],
       );
+      void refreshWorktreePicker(cwdInput.value);
 
       try {
         const models = await api.systemModels.get() as { items?: Array<{ id?: string }> };

@@ -39,6 +39,143 @@ export function gitCommonTopLevel(dir: string): string | null {
   }
 }
 
+export interface ListedWorktree {
+  path: string;
+  branch: string | null;
+  bare: boolean;
+  detached: boolean;
+  /** True for the primary checkout (first entry from `git worktree list`). */
+  isMain: boolean;
+  /** Short chip label. */
+  label: string;
+}
+
+function branchShort(ref: string | null): string | null {
+  if (!ref) return null;
+  return ref.replace(/^refs\/heads\//, '');
+}
+
+function worktreeLabel(wtPath: string, branch: string | null, isMain: boolean, detached: boolean): string {
+  const base = path.basename(wtPath);
+  if (isMain) return branch ? `main · ${branch}` : 'main';
+  if (branch) return `${base} · ${branch}`;
+  if (detached) return `${base} · detached`;
+  return base;
+}
+
+/**
+ * List git worktrees for the repo that contains `cwd`.
+ * Uses `git worktree list --porcelain` and also surfaces checkouts under
+ * `~/.grok/worktrees/<repo>/` that belong to the same repo.
+ */
+export function listRepoWorktrees(cwd: string): ListedWorktree[] {
+  const resolved = path.resolve(cwd);
+  if (!isGitWorkTree(resolved)) return [];
+
+  let porcelain = '';
+  try {
+    porcelain = runGit(['-C', resolved, 'worktree', 'list', '--porcelain']);
+  } catch {
+    return [];
+  }
+
+  const out: ListedWorktree[] = [];
+  const seen = new Set<string>();
+  let current: Partial<ListedWorktree> & { path?: string } = {};
+  let first = true;
+
+  const real = (p: string): string => {
+    try { return fs.realpathSync(path.resolve(p)); }
+    catch { return path.resolve(p); }
+  };
+
+  const flush = () => {
+    if (!current.path) return;
+    const abs = real(current.path);
+    if (seen.has(abs)) return;
+    seen.add(abs);
+    const branch = branchShort(current.branch ?? null);
+    const isMain = !!current.isMain || first;
+    first = false;
+    out.push({
+      path: abs,
+      branch,
+      bare: !!current.bare,
+      detached: !!current.detached,
+      isMain,
+      label: worktreeLabel(abs, branch, isMain, !!current.detached),
+    });
+    current = {};
+  };
+
+  for (const line of porcelain.split('\n')) {
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    if (line.startsWith('worktree ')) {
+      flush();
+      current.path = line.slice('worktree '.length);
+    } else if (line.startsWith('branch ')) {
+      current.branch = line.slice('branch '.length);
+    } else if (line === 'bare') {
+      current.bare = true;
+    } else if (line === 'detached') {
+      current.detached = true;
+    }
+  }
+  flush();
+
+  // Mark first porcelain entry as main if none flagged.
+  if (out.length && !out.some((w) => w.isMain)) {
+    out[0]!.isMain = true;
+    out[0]!.label = worktreeLabel(out[0]!.path, out[0]!.branch, true, out[0]!.detached);
+  }
+
+  // Discover grok-remote-managed worktrees not yet listed (same common dir).
+  try {
+    const top = gitCommonTopLevel(resolved);
+    if (top) {
+      const repoName = path.basename(top);
+      const managedRoot = path.join(os.homedir(), '.grok', 'worktrees', repoName);
+      if (fs.existsSync(managedRoot)) {
+        for (const name of fs.readdirSync(managedRoot)) {
+          const p = real(path.join(managedRoot, name));
+          if (seen.has(p)) continue;
+          if (!isGitWorkTree(p)) continue;
+          // Same repo? compare absolute git-common-dir.
+          try {
+            const a = runGit(['-C', top, 'rev-parse', '--git-common-dir']);
+            const b = runGit(['-C', p, 'rev-parse', '--git-common-dir']);
+            const aAbs = path.isAbsolute(a) ? path.resolve(a) : path.resolve(top, a);
+            const bAbs = path.isAbsolute(b) ? path.resolve(b) : path.resolve(p, b);
+            if (aAbs !== bAbs) continue;
+          } catch {
+            continue;
+          }
+          let branch: string | null = null;
+          let detached = false;
+          try {
+            branch = runGit(['-C', p, 'branch', '--show-current']) || null;
+            if (!branch) detached = true;
+          } catch { /* ignore */ }
+          seen.add(p);
+          out.push({
+            path: p,
+            branch,
+            bare: false,
+            detached,
+            isMain: false,
+            label: worktreeLabel(p, branch, false, detached),
+          });
+        }
+      }
+    }
+  } catch { /* ignore scan errors */ }
+
+  return out;
+}
+
 function sanitizeName(name: string): string {
   const s = String(name || '')
     .trim()

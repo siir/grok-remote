@@ -138,6 +138,13 @@ export const api = {
       const tail = qs.toString();
       return request('GET', `/api/fs/browse${tail ? `?${tail}` : ''}`);
     },
+    /** Git worktrees for the repo containing `path` (new-session picker). */
+    worktrees: (dirPath?: string | null): Promise<unknown> => {
+      const qs = new URLSearchParams();
+      if (dirPath != null && String(dirPath).length) qs.set('path', String(dirPath));
+      const tail = qs.toString();
+      return request('GET', `/api/fs/worktrees${tail ? `?${tail}` : ''}`);
+    },
   },
 
   mcp: {
